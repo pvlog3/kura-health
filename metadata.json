@@ -1,0 +1,8 @@
+{
+  "name": "Kura Health",
+  "description": "A comprehensive healthcare appointment marketplace connecting patients with medical professionals, featuring distinct dashboards for scheduling and management.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
