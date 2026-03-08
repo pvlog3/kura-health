@@ -45,6 +45,7 @@ export interface Appointment {
   hasReceipt?: boolean;
   reviewed?: boolean;
   createdAt: any;
+  location?: string;
 }
 
 export interface Review {
