@@ -44,7 +44,7 @@ export interface Appointment {
   doctorComment?: string;
   hasReceipt?: boolean;
   reviewed?: boolean;
-  createdAt: any;
+  createdAt: string;
   location?: string;
 }
 

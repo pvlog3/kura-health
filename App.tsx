@@ -13,19 +13,7 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#121417]">
         <div className="flex flex-col items-center space-y-6">
-          <div className="w-16 h-16 bg-[#A2F0D3] rounded-[20px] flex items-center justify-center p-3 animate-pulse shadow-2xl shadow-[#A2F0D3]/20">
-            <svg viewBox="0 0 100 100" className="w-full h-full text-black fill-current">
-              <g transform="translate(50, 50)">
-                {[0, 45, 90, 135, 180, 225, 270, 315].map((angle) => (
-                  <path
-                    key={angle}
-                    transform={`rotate(${angle})`}
-                    d="M 0 -10 C 15 -10, 15 -35, 0 -35 C -15 -35, -15 -10, 0 -10 Z"
-                  />
-                ))}
-              </g>
-            </svg>
-          </div>
+          <img src="/kura-logo.svg" alt="Kura" className="w-16 h-16 animate-pulse shadow-2xl shadow-[#A2F0D3]/20 rounded-[20px]" />
           <p className="text-slate-400 text-xs font-black uppercase tracking-[0.3em] animate-pulse">Connecting to Kura...</p>
         </div>
       </div>

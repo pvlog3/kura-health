@@ -12,20 +12,7 @@ interface LayoutProps {
 }
 
 const KuraLogo = () => (
-  <div className="w-9 h-9 bg-[#A2F0D3] rounded-[10px] flex items-center justify-center p-1.5 shadow-lg shadow-[#A2F0D3]/10">
-    <svg viewBox="0 0 100 100" className="w-full h-full text-black fill-current">
-      {/* 8-petal floral icon recreation */}
-      <g transform="translate(50, 50)">
-        {[0, 45, 90, 135, 180, 225, 270, 315].map((angle) => (
-          <path
-            key={angle}
-            transform={`rotate(${angle})`}
-            d="M 0 -10 C 15 -10, 15 -35, 0 -35 C -15 -35, -15 -10, 0 -10 Z"
-          />
-        ))}
-      </g>
-    </svg>
-  </div>
+  <img src="/kura-logo.svg" alt="Kura" className="w-9 h-9 shadow-lg shadow-[#A2F0D3]/10 rounded-[10px]" />
 );
 
 const Layout: React.FC<LayoutProps> = ({ children, profile }) => {
@@ -75,7 +62,7 @@ const Layout: React.FC<LayoutProps> = ({ children, profile }) => {
           <div className="flex justify-center mb-4">
              <KuraLogo />
           </div>
-          <p className="text-slate-500 text-xs font-medium tracking-tight uppercase tracking-[0.2em]">© 2024 Kura Health. Reimagining healthcare connections.</p>
+          <p className="text-slate-500 text-xs font-medium tracking-tight uppercase tracking-[0.2em]">© {new Date().getFullYear()} Kura Health. Reimagining healthcare connections.</p>
         </div>
       </footer>
     </div>

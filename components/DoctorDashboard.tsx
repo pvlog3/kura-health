@@ -280,7 +280,7 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
               </div>
             </div>
             <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
-              {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(d => <div key={d}>{d}</div>)}
+              {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => <div key={i}>{d}</div>)}
             </div>
             <div className="grid grid-cols-7 gap-1">
               {monthDays.map((date, i) => (

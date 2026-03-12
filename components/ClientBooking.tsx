@@ -139,9 +139,9 @@ const ClientBooking: React.FC<ClientBookingProps> = ({ profile }) => {
 
   const generateAiHealthTips = async () => {
     try {
-      const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_API_KEY ?? import.meta.env.VITE_GEMINI_API_KEY ?? (typeof process !== 'undefined' && process.env?.API_KEY) });
+      const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_API_KEY ?? import.meta.env.VITE_GEMINI_API_KEY });
       const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-2.0-flash',
         contents: `Generate 4 distinct health tips for ${profile.name}. Use valid Google Material Symbol names for icons. 
         Return JSON array: {category, title, text, icon, accent: 'blue'|'emerald'|'amber'|'rose'|'indigo'}`,
         config: { 
@@ -187,7 +187,7 @@ const ClientBooking: React.FC<ClientBookingProps> = ({ profile }) => {
     try {
       const validCategories = CATEGORIES_CONFIG.map(c => c.id).join(', ');
       const validSpecialties = CATEGORIES_CONFIG.map(c => `${c.id}: [${c.specialties.join(', ')}]`).join('; ');
-      const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_API_KEY ?? import.meta.env.VITE_GEMINI_API_KEY ?? process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_API_KEY ?? import.meta.env.VITE_GEMINI_API_KEY });
       const response = await ai.models.generateContent({
         model: 'gemini-1.5-flash',
         contents: `You are a medical triage assistant. Based on these symptoms: "${text}"
@@ -244,6 +244,8 @@ If unclear or emergency (chest pain, difficulty breathing, stroke symptoms), ret
         createdAt: new Date().toISOString()
       });
       setBookingFor(null);
+      setBookingDate('');
+      setBookingTime('');
       setShowSuccessPopup(true);
     } catch (error) { console.error(error); }
   };
@@ -272,6 +274,14 @@ If unclear or emergency (chest pain, difficulty breathing, stroke symptoms), ret
     }
     return slots;
   }, [bookingFor]);
+
+  const isBookingDayValid = useMemo(() => {
+    if (!bookingFor || !bookingDate) return true;
+    // Use noon local time to avoid DST/timezone shifts flipping the date
+    const dayOfWeek = new Date(`${bookingDate}T12:00:00`).getDay();
+    const workDays = bookingFor.availability?.days ?? [1, 2, 3, 4, 5];
+    return workDays.includes(dayOfWeek);
+  }, [bookingFor, bookingDate]);
 
   const getAccentStyles = (accent: string) => {
     const map: Record<string, { icon: string, bg: string, text: string, border: string }> = {
@@ -685,7 +695,7 @@ If unclear or emergency (chest pain, difficulty breathing, stroke symptoms), ret
       {/* Cancellation Modal */}
       {appToCancel && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-6 z-[800] animate-in fade-in">
-           <div className="bg-[#1e2124] rounded-[3rem] p-10 max-sm w-full border border-red-900/20 text-center space-y-8 animate-in zoom-in-95">
+           <div className="bg-[#1e2124] rounded-[3rem] p-10 max-w-sm w-full border border-red-900/20 text-center space-y-8 animate-in zoom-in-95">
               <div className="w-20 h-20 bg-red-600/10 rounded-full flex items-center justify-center mx-auto text-red-500">
                 <span className="material-symbols-outlined text-3xl font-black">error</span>
               </div>
@@ -721,7 +731,13 @@ If unclear or emergency (chest pain, difficulty breathing, stroke symptoms), ret
                     {bookingDate && (
                       <div className="animate-in slide-in-from-top-4 duration-300">
                          <label className="block text-[10px] font-black uppercase tracking-widest text-slate-600 mb-4 ml-1">2. Select Available Slot</label>
-                         {fetchingSlots ? (
+                         {!isBookingDayValid ? (
+                           <div className="py-8 text-center bg-amber-900/10 border border-amber-900/20 rounded-2xl">
+                             <span className="material-symbols-outlined text-amber-500 text-3xl">event_busy</span>
+                             <p className="text-amber-400 text-xs font-black uppercase tracking-widest mt-2">Not a working day</p>
+                             <p className="text-slate-500 text-xs mt-1">This professional is not available on that day. Please choose another date.</p>
+                           </div>
+                         ) : fetchingSlots ? (
                            <div className="py-10 text-center"><div className="w-8 h-8 border-4 border-[#A2F0D3] border-t-transparent rounded-full animate-spin mx-auto"></div></div>
                          ) : (
                            <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 max-h-60 overflow-y-auto pr-2 no-scrollbar">

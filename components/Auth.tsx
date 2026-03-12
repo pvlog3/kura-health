@@ -14,19 +14,7 @@ const CATEGORIES_DATA: Record<string, string[]> = {
 
 const KuraLogoLarge = () => (
   <div className="flex flex-col items-center space-y-6 mb-12">
-    <div className="w-24 h-24 bg-[#A2F0D3] rounded-[28px] flex items-center justify-center p-4 shadow-2xl shadow-[#A2F0D3]/20">
-      <svg viewBox="0 0 100 100" className="w-full h-full text-black fill-current">
-        <g transform="translate(50, 50)">
-          {[0, 45, 90, 135, 180, 225, 270, 315].map((angle) => (
-            <path
-              key={angle}
-              transform={`rotate(${angle})`}
-              d="M 0 -10 C 15 -10, 15 -35, 0 -35 C -15 -35, -15 -10, 0 -10 Z"
-            />
-          ))}
-        </g>
-      </svg>
-    </div>
+    <img src="/kura-logo.svg" alt="Kura" className="w-24 h-24 shadow-2xl shadow-[#A2F0D3]/20 rounded-[28px]" />
     <h1 className="text-4xl font-black tracking-[0.15em] text-white">KURA</h1>
   </div>
 );
@@ -79,6 +67,9 @@ const Auth: React.FC = () => {
       let msg = err.message;
       if (err.code === 'auth/user-not-found') msg = "User not found.";
       if (err.code === 'auth/wrong-password') msg = "Incorrect password.";
+      if (err.code === 'auth/invalid-credential') msg = "Invalid email or password.";
+      if (err.code === 'auth/email-already-in-use') msg = "An account with this email already exists.";
+      if (err.code === 'auth/weak-password') msg = "Password must be at least 6 characters.";
       setError(msg || 'Authentication failed. Please check your credentials.');
     } finally {
       setLoading(false);
