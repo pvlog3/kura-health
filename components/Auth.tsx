@@ -14,7 +14,7 @@ const CATEGORIES_DATA: Record<string, string[]> = {
 
 const KuraLogoLarge = () => (
   <div className="flex flex-col items-center space-y-6 mb-12">
-    <img src="/kura-logo.svg" alt="Kura" className="w-24 h-24 shadow-2xl shadow-[#A2F0D3]/20 rounded-[28px]" />
+    <img src="/kura-logo.png" alt="Kura" className="w-24 h-24 shadow-2xl shadow-[#A2F0D3]/20 rounded-[28px]" />
     <h1 className="text-4xl font-black tracking-[0.15em] text-white">KURA</h1>
   </div>
 );

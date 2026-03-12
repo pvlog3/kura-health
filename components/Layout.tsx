@@ -12,7 +12,7 @@ interface LayoutProps {
 }
 
 const KuraLogo = () => (
-  <img src="/kura-logo.svg" alt="Kura" className="w-9 h-9 shadow-lg shadow-[#A2F0D3]/10 rounded-[10px]" />
+  <img src="/kura-logo.png" alt="Kura" className="w-9 h-9 shadow-lg shadow-[#A2F0D3]/10 rounded-[10px]" />
 );
 
 const Layout: React.FC<LayoutProps> = ({ children, profile }) => {
