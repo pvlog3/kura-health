@@ -10,7 +10,7 @@ import {
   updateDoc,
   limit
 } from 'firebase/firestore';
-import type { UserProfile, Appointment, Review, WorkingHours, Education } from '../types';
+import type { UserProfile, Appointment, Review, WorkingHours, Education, PatientNote } from '../types';
 
 interface DoctorDashboardProps {
   profile: UserProfile;
@@ -58,6 +58,15 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
   const [commentingId, setCommentingId] = useState<string | null>(null);
   const [tempComment, setTempComment] = useState('');
   const [selectedPeriod, setSelectedPeriod] = useState<'yearly' | 'monthly' | 'weekly'>('monthly');
+  const [selectedPatient, setSelectedPatient] = useState<{
+    patientId: string;
+    patientName: string;
+    appointmentId?: string;
+    visitDate?: string;
+  } | null>(null);
+  const [patientNotes, setPatientNotes] = useState<PatientNote[]>([]);
+  const [noteInput, setNoteInput] = useState('');
+  const [savingNote, setSavingNote] = useState(false);
 
   // Rooms to rent
   const [rooms, setRooms] = useState<RoomListing[]>([]);
@@ -120,6 +129,23 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
       unsubscribeApps();
       unsubscribeReviews();
     };
+  }, [profile.uid]);
+
+  useEffect(() => {
+    const q = query(
+      collection(db, 'patient_notes'),
+      where('doctorId', '==', profile.uid)
+    );
+    const unsub = onSnapshot(q, (snapshot) => {
+      const notes = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as PatientNote));
+      notes.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setPatientNotes(notes);
+    }, (error) => {
+      if (error.code !== 'permission-denied') {
+        console.error('Patient notes snapshot error:', error);
+      }
+    });
+    return () => unsub();
   }, [profile.uid]);
 
   useEffect(() => {
@@ -237,6 +263,26 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
       alert("Failed to update profile.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSaveNote = async () => {
+    if (!selectedPatient || !noteInput.trim() || savingNote) return;
+    setSavingNote(true);
+    try {
+      await addDoc(collection(db, 'patient_notes'), {
+        doctorId: profile.uid,
+        patientId: selectedPatient.patientId,
+        patientName: selectedPatient.patientName,
+        content: noteInput.trim(),
+        visitDate: selectedPatient.visitDate ?? new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      });
+      setNoteInput('');
+    } catch (e) {
+      alert('Failed to save note. Please try again.');
+    } finally {
+      setSavingNote(false);
     }
   };
 
@@ -790,6 +836,131 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
     </div>
   );
 
+  const renderPatientPanel = () => {
+    if (!selectedPatient) return null;
+
+    const patientApps = appointments.filter(a => a.patientId === selectedPatient.patientId);
+    const visitCount = patientApps.length;
+    const latestApp = [...patientApps].sort(
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+    )[0];
+    const notes = patientNotes.filter(n => n.patientId === selectedPatient.patientId);
+
+    return (
+      <div
+        className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-end sm:items-center justify-end p-0 sm:p-6 z-[110] animate-in fade-in duration-200"
+        onClick={() => { setSelectedPatient(null); setNoteInput(''); }}
+      >
+        <div
+          className="bg-white rounded-t-[2.5rem] sm:rounded-[2.5rem] w-full sm:w-[480px] max-h-[92vh] flex flex-col shadow-2xl animate-in slide-in-from-bottom-8 sm:slide-in-from-right-8 duration-300"
+          onClick={e => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between px-8 pt-8 pb-5 border-b border-slate-100 shrink-0">
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 rounded-2xl overflow-hidden bg-slate-100 shrink-0">
+                <img
+                  src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${selectedPatient.patientName}`}
+                  alt={selectedPatient.patientName}
+                  className="w-full h-full"
+                />
+              </div>
+              <div>
+                <h2 className="text-xl font-black text-slate-900 tracking-tighter leading-tight">
+                  {selectedPatient.patientName}
+                </h2>
+                <div className="flex items-center gap-2 mt-1.5">
+                  <span className="text-xs font-bold text-slate-400">
+                    {visitCount} {visitCount === 1 ? 'visit' : 'visits'}
+                  </span>
+                  {latestApp && (
+                    <span className={`text-[10px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded-full ${
+                      latestApp.type === 'virtual'
+                        ? 'bg-indigo-50 text-indigo-500'
+                        : 'bg-[#A2F0D3]/40 text-emerald-700'
+                    }`}>
+                      {latestApp.type === 'virtual' ? 'Virtual' : 'In-Person'}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => { setSelectedPatient(null); setNoteInput(''); }}
+              className="w-9 h-9 rounded-xl bg-slate-100 text-slate-400 flex items-center justify-center hover:bg-slate-200 transition shrink-0"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path d="M6 18L18 6M6 6l12 12" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </div>
+
+          {/* Timeline */}
+          <div className="flex-1 overflow-y-auto px-8 py-6 no-scrollbar">
+            <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-4">
+              Session History
+            </h3>
+            {notes.length === 0 ? (
+              <div className="text-center py-14">
+                <span className="material-symbols-outlined block text-slate-200 mb-3" style={{ fontSize: '44px' }}>note_alt</span>
+                <p className="text-slate-400 text-sm font-medium">No notes yet for this patient</p>
+                <p className="text-slate-300 text-xs mt-1">Add your first note below</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {notes.map((note, i) => (
+                  <div key={note.id} className="relative pl-6">
+                    {/* Timeline line */}
+                    {i < notes.length - 1 && (
+                      <div className="absolute left-[7px] top-5 bottom-[-16px] w-px bg-slate-100" />
+                    )}
+                    {/* Dot */}
+                    <div className="absolute left-0 top-[18px] w-3.5 h-3.5 rounded-full bg-[#A2F0D3] border-2 border-white shadow-sm" />
+                    <div className="bg-slate-50 rounded-2xl p-5 border border-slate-100">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+                        {new Date(note.visitDate).toLocaleDateString('en-US', {
+                          weekday: 'short',
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                        })}
+                      </p>
+                      <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
+                        {note.content}
+                      </p>
+                      <p className="text-[10px] text-slate-300 font-bold mt-2">
+                        Saved at {new Date(note.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Add Note footer */}
+          <div className="px-8 pb-8 pt-4 border-t border-slate-100 shrink-0 space-y-3">
+            <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Add Note</h3>
+            <textarea
+              value={noteInput}
+              onChange={e => setNoteInput(e.target.value)}
+              placeholder="Write a session note, diagnosis, observations..."
+              rows={3}
+              className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 resize-none transition-all"
+            />
+            <button
+              onClick={handleSaveNote}
+              disabled={!noteInput.trim() || savingNote}
+              className="w-full py-4 bg-slate-900 text-white font-black uppercase text-[10px] tracking-widest rounded-2xl hover:bg-black shadow-xl disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            >
+              {savingNote ? 'Saving...' : 'Save Note'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const pendingAppointments = appointments.filter(a => a.status === 'pending');
   const nextAppointment = pendingAppointments[0];
   const averageRating = reviews.length > 0 
@@ -953,7 +1124,19 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
                   ) : recentPatients.map((app, i) => (
                     <tr key={app.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="px-6 py-4 text-slate-400 font-bold text-xs">{String(i + 1).padStart(2, '0')}</td>
-                      <td className="px-4 py-4 font-bold text-slate-900 text-sm">{app.patientName}</td>
+                      <td className="px-4 py-4 font-bold text-slate-900 text-sm">
+                        <button
+                          className="hover:text-blue-600 transition-colors text-left font-bold underline-offset-2 hover:underline"
+                          onClick={() => setSelectedPatient({
+                            patientId: app.patientId,
+                            patientName: app.patientName,
+                            appointmentId: app.id,
+                            visitDate: app.date,
+                          })}
+                        >
+                          {app.patientName}
+                        </button>
+                      </td>
                       <td className="px-4 py-4 text-slate-500 text-xs whitespace-nowrap">
                         {new Date(app.date).toLocaleDateString('en-US', { day: '2-digit', month: '2-digit', year: 'numeric' })}
                       </td>
@@ -1116,7 +1299,16 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
               ) : (
                 <div className="divide-y divide-slate-50">
                   {dayAppointments.map(app => (
-                    <div key={app.id} className="px-4 py-4 flex items-center gap-3 hover:bg-slate-50 transition cursor-pointer">
+                    <div
+                      key={app.id}
+                      className="px-4 py-4 flex items-center gap-3 hover:bg-slate-50 transition cursor-pointer"
+                      onClick={() => setSelectedPatient({
+                        patientId: app.patientId,
+                        patientName: app.patientName,
+                        appointmentId: app.id,
+                        visitDate: app.date,
+                      })}
+                    >
                       <div className="w-10 h-10 rounded-full bg-slate-100 overflow-hidden shrink-0">
                         <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${app.patientName}`} alt="" className="w-full h-full" />
                       </div>
@@ -1163,6 +1355,8 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
         </div>
       )}
 
+      {renderPatientPanel()}
+
       {currentView === 'overview'
         ? renderOverview()
         : currentView === 'schedule'
@@ -1173,21 +1367,21 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
 
       <nav className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-white/80 backdrop-blur-2xl border border-slate-200 h-20 rounded-[2.5rem] flex items-center px-4 z-50 shadow-2xl min-w-[420px]">
         <div className="flex w-full justify-around items-center">
-          <button onClick={() => setCurrentView('overview')} className={`flex flex-col items-center px-6 py-2 rounded-2xl transition-all ${currentView === 'overview' ? 'text-blue-600 scale-110' : 'text-slate-300'}`}>
+          <button onClick={() => { setCurrentView('overview'); setSelectedPatient(null); setNoteInput(''); }} className={`flex flex-col items-center px-6 py-2 rounded-2xl transition-all ${currentView === 'overview' ? 'text-blue-600 scale-110' : 'text-slate-300'}`}>
             <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
             <span className="text-[10px] mt-1 font-black uppercase tracking-tighter">Summary</span>
           </button>
-          <button onClick={() => setCurrentView('schedule')} className={`flex flex-col items-center px-6 py-2 rounded-2xl transition-all ${currentView === 'schedule' ? 'text-blue-600 scale-110' : 'text-slate-300'}`}>
+          <button onClick={() => { setCurrentView('schedule'); setSelectedPatient(null); setNoteInput(''); }} className={`flex flex-col items-center px-6 py-2 rounded-2xl transition-all ${currentView === 'schedule' ? 'text-blue-600 scale-110' : 'text-slate-300'}`}>
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
             <span className="text-[10px] mt-1 font-black uppercase tracking-tighter">Schedule</span>
           </button>
-          <button onClick={() => setCurrentView('rooms')} className={`flex flex-col items-center px-6 py-2 rounded-2xl transition-all ${currentView === 'rooms' ? 'text-blue-600 scale-110' : 'text-slate-300'}`}>
+          <button onClick={() => { setCurrentView('rooms'); setSelectedPatient(null); setNoteInput(''); }} className={`flex flex-col items-center px-6 py-2 rounded-2xl transition-all ${currentView === 'rooms' ? 'text-blue-600 scale-110' : 'text-slate-300'}`}>
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2.5">
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 21V5a2 2 0 012-2h7a2 2 0 012 2v16M7 21v-4a2 2 0 012-2h3M14 7h5a2 2 0 012 2v12M17 21v-4" />
             </svg>
             <span className="text-[10px] mt-1 font-black uppercase tracking-tighter">Rooms</span>
           </button>
-          <button onClick={() => { setCurrentView('profile'); setIsEditingProfile(false); }} className={`flex flex-col items-center px-6 py-2 rounded-2xl transition-all ${currentView === 'profile' ? 'text-blue-600 scale-110' : 'text-slate-300'}`}>
+          <button onClick={() => { setCurrentView('profile'); setIsEditingProfile(false); setSelectedPatient(null); setNoteInput(''); }} className={`flex flex-col items-center px-6 py-2 rounded-2xl transition-all ${currentView === 'profile' ? 'text-blue-600 scale-110' : 'text-slate-300'}`}>
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
             <span className="text-[10px] mt-1 font-black uppercase tracking-tighter">Portfolio</span>
           </button>

@@ -77,3 +77,13 @@ export interface MedicationLog {
   time: string;        // "HH:MM"
   takenAt: string;     // ISO timestamp
 }
+
+export interface PatientNote {
+  id: string;
+  doctorId: string;
+  patientId: string;
+  patientName: string;
+  content: string;
+  visitDate: string;   // ISO string — pre-filled from appointment date
+  createdAt: string;   // ISO string — when the note was saved
+}
