@@ -57,6 +57,7 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
   const [currentView, setCurrentView] = useState<DoctorView>('overview');
   const [commentingId, setCommentingId] = useState<string | null>(null);
   const [tempComment, setTempComment] = useState('');
+  const [selectedPeriod, setSelectedPeriod] = useState<'yearly' | 'monthly' | 'weekly'>('monthly');
 
   // Rooms to rent
   const [rooms, setRooms] = useState<RoomListing[]>([]);
@@ -795,65 +796,357 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
     ? (reviews.reduce((acc, r) => acc + r.rating, 0) / reviews.length).toFixed(1)
     : '5.0';
 
-  const renderOverview = () => (
-    <div className="space-y-8 animate-in fade-in duration-500 pb-24 text-slate-900">
-      {nextAppointment && (
-        <section className="bg-slate-900 p-8 rounded-[2.5rem] text-white shadow-2xl relative overflow-hidden">
-          <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-8">
-            <div className="flex items-center space-x-6">
-              <div className="w-24 h-24 rounded-[2rem] bg-white/10 backdrop-blur-md border border-white/20 p-1">
-                <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${nextAppointment.patientName}`} className="w-full h-full rounded-[1.8rem] bg-slate-800" alt="" />
+  const renderOverview = () => {
+    const today = new Date();
+    const totalApps = appointments.length;
+    const doneCount = appointments.filter(a => a.status === 'done').length;
+    const virtualCount = appointments.filter(a => a.type === 'virtual').length;
+    const inPersonCount = appointments.filter(a => a.type === 'in-person').length;
+    const todayCount = appointments.filter(a => new Date(a.date).toDateString() === today.toDateString()).length;
+
+    // Donut chart segments via SVG arc paths
+    const donutData = [
+      { label: 'Virtual', value: virtualCount, color: '#4B9FE1' },
+      { label: 'In-Person', value: inPersonCount, color: '#F97316' },
+      { label: 'Pending', value: pendingAppointments.length, color: '#1E40AF' },
+      { label: 'Completed', value: doneCount, color: '#A2F0D3' },
+    ].filter(d => d.value > 0);
+
+    const donutTotal = donutData.reduce((s, d) => s + d.value, 0) || 1;
+    const CX = 75, CY = 75, R = 55;
+    let cumAngle = -90;
+    const donutSegments = donutData.map(d => {
+      const spanAngle = (d.value / donutTotal) * 360;
+      const x1 = CX + R * Math.cos(cumAngle * Math.PI / 180);
+      const y1 = CY + R * Math.sin(cumAngle * Math.PI / 180);
+      const endAngle = cumAngle + spanAngle;
+      const x2 = CX + R * Math.cos((endAngle - 0.01) * Math.PI / 180);
+      const y2 = CY + R * Math.sin((endAngle - 0.01) * Math.PI / 180);
+      const largeArc = spanAngle > 180 ? 1 : 0;
+      const path = `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${R} ${R} 0 ${largeArc} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`;
+      cumAngle = endAngle;
+      return { ...d, path };
+    });
+
+    const recentPatients = [...appointments]
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 5);
+
+    const selectedDateStr = selectedDate.toDateString();
+    const dayAppointments = [...appointments]
+      .filter(a => new Date(a.date).toDateString() === selectedDateStr)
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    return (
+      <div className="flex gap-5 text-slate-900 animate-in fade-in duration-500 pb-28">
+
+        {/* ── MAIN CONTENT ── */}
+        <div className="flex-1 min-w-0 space-y-5">
+
+          {/* Period toggle + date picker */}
+          <div className="flex items-center justify-between">
+            <div className="flex bg-slate-100 rounded-xl p-1">
+              {(['Yearly', 'Monthly', 'Weekly'] as const).map(p => (
+                <button
+                  key={p}
+                  onClick={() => setSelectedPeriod(p.toLowerCase() as 'yearly' | 'monthly' | 'weekly')}
+                  className={`px-5 py-2 rounded-lg text-xs font-bold transition-all ${
+                    selectedPeriod === p.toLowerCase()
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+            <button className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-600 shadow-sm hover:bg-slate-50 transition">
+              <span className="material-symbols-outlined" style={{ fontSize: '15px' }}>calendar_month</span>
+              Select Dates
+            </button>
+          </div>
+
+          {/* Stats cards + Patient Overview donut */}
+          <div className="flex gap-5">
+            {/* 2×2 stat cards */}
+            <div className="grid grid-cols-2 gap-4 flex-1">
+              {[
+                { label: 'Total Patients',  value: totalApps,              icon: 'groups',         bg: 'bg-blue-50',   ic: 'text-blue-500',   trend: '+0.39%', up: true  },
+                { label: 'New Patients',    value: pendingAppointments.length, icon: 'person_add',  bg: 'bg-purple-50', ic: 'text-purple-500', trend: '+0.62%', up: true  },
+                { label: 'Old Patients',    value: doneCount,              icon: 'person',         bg: 'bg-slate-50',  ic: 'text-slate-400',  trend: '-0.12%', up: false },
+                { label: 'Appointments',    value: todayCount,             icon: 'event_available',bg: 'bg-green-50',  ic: 'text-green-500',  trend: '-2%',    up: false },
+              ].map(s => (
+                <div key={s.label} className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+                  <div className="flex items-start justify-between mb-3">
+                    <div className={`w-10 h-10 rounded-xl ${s.bg} ${s.ic} flex items-center justify-center`}>
+                      <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>{s.icon}</span>
+                    </div>
+                    <button className="text-slate-300 hover:text-slate-500 transition">
+                      <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>more_vert</span>
+                    </button>
+                  </div>
+                  <p className="text-3xl font-black text-slate-900">{s.value}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{s.label}</p>
+                  <span className={`text-[11px] font-bold ${s.up ? 'text-emerald-500' : 'text-red-400'}`}>
+                    {s.up ? '▲' : '▼'} {s.trend}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {/* Patient Overview donut */}
+            <div className="w-64 bg-white rounded-2xl p-5 border border-slate-100 shadow-sm shrink-0">
+              <h3 className="font-black text-slate-900 text-sm mb-3">Patient Overview</h3>
+              <div className="space-y-1.5 mb-2">
+                {donutData.map(d => (
+                  <div key={d.label} className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: d.color }} />
+                      <span className="text-xs text-slate-500">{d.label}</span>
+                    </div>
+                    <span className="text-xs font-black text-slate-700">{d.value}</span>
+                  </div>
+                ))}
               </div>
-              <div>
-                <p className="text-[#A2F0D3] text-[10px] font-black uppercase tracking-[0.2em] mb-2">Next Patient Spotlight</p>
-                <h2 className="text-3xl font-black tracking-tight">{nextAppointment.patientName}</h2>
-                <p className="text-slate-400 text-sm mt-2 font-bold uppercase tracking-widest">{new Date(nextAppointment.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {nextAppointment.type}</p>
+              <div className="flex justify-center">
+                <svg width="150" height="150" viewBox="0 0 150 150">
+                  {donutData.length === 0 ? (
+                    <circle cx={CX} cy={CY} r={R} fill="none" stroke="#f1f5f9" strokeWidth="20" />
+                  ) : (
+                    donutSegments.map((seg, i) => (
+                      <path key={i} d={seg.path} fill="none" stroke={seg.color} strokeWidth="20" strokeLinecap="butt" />
+                    ))
+                  )}
+                  <text x={CX} y={CY - 5} textAnchor="middle" style={{ fontSize: '20px', fontWeight: '900', fill: '#0f172a', fontFamily: 'inherit' }}>{totalApps}</text>
+                  <text x={CX} y={CY + 13} textAnchor="middle" style={{ fontSize: '9px', fill: '#94a3b8', fontWeight: '600', fontFamily: 'inherit' }}>Total Patients</text>
+                </svg>
               </div>
             </div>
-            <button onClick={() => handleComplete(nextAppointment.id)} className="px-8 py-4 bg-[#A2F0D3] text-black rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl">Check-In</button>
           </div>
-        </section>
-      )}
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-200">
-          <h3 className="text-slate-400 text-[10px] font-black uppercase tracking-widest">Global Score</h3>
-          <p className="text-3xl font-black text-slate-900 mt-2">{averageRating}</p>
-        </div>
-        <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-200">
-          <h3 className="text-slate-400 text-[10px] font-black uppercase tracking-widest">Pending</h3>
-          <p className="text-3xl font-black text-blue-600 mt-2">{pendingAppointments.length}</p>
-        </div>
-        <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-200">
-          <h3 className="text-slate-400 text-[10px] font-black uppercase tracking-widest">Daily Count</h3>
-          <p className="text-3xl font-black text-slate-900 mt-2">{appointments.filter(a => new Date(a.date).toDateString() === new Date().toDateString()).length}</p>
-        </div>
-        <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-200">
-          <h3 className="text-slate-400 text-[10px] font-black uppercase tracking-widest">Completed</h3>
-          <p className="text-3xl font-black text-emerald-600 mt-2">{appointments.filter(a => a.status === 'done').length}</p>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-200 overflow-hidden">
-        <div className="px-8 py-6 border-b border-slate-100 flex justify-between items-center">
-          <h2 className="text-sm font-black uppercase tracking-[0.2em] text-slate-900">Queue</h2>
-        </div>
-        <div className="divide-y divide-slate-100">
-          {pendingAppointments.map(app => (
-            <div key={app.id} className="p-8 flex items-center justify-between">
-              <div className="flex items-center space-x-5">
-                <div className="w-12 h-12 rounded-2xl bg-slate-100 overflow-hidden"><img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${app.patientName}`} alt="" /></div>
-                <div><h4 className="font-bold text-slate-900">{app.patientName}</h4><p className="text-slate-500 text-xs font-medium uppercase mt-0.5">{new Date(app.date).toLocaleTimeString()} • {app.type}</p></div>
-              </div>
-              <button onClick={() => handleComplete(app.id)} className="w-10 h-10 rounded-full bg-slate-900 text-white flex items-center justify-center">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          {/* My Patients table */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="font-black text-slate-900 text-sm">My Patients</h3>
+              <button className="flex items-center gap-1.5 text-xs font-bold text-slate-500 border border-slate-200 rounded-xl px-3 py-1.5 hover:bg-slate-50 transition">
+                Most Recent
+                <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>expand_more</span>
               </button>
             </div>
-          ))}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-50 bg-slate-50/50">
+                    <th className="text-left px-6 py-3 text-[10px] font-black uppercase tracking-widest text-slate-400">#</th>
+                    <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-400">Name</th>
+                    <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-400">Date & Time</th>
+                    <th className="text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-400">Appointed for</th>
+                    <th className="text-center px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-400">Report</th>
+                    <th className="text-center px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-400">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {recentPatients.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="text-center py-12 text-slate-400 text-sm">No patients yet</td>
+                    </tr>
+                  ) : recentPatients.map((app, i) => (
+                    <tr key={app.id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="px-6 py-4 text-slate-400 font-bold text-xs">{String(i + 1).padStart(2, '0')}</td>
+                      <td className="px-4 py-4 font-bold text-slate-900 text-sm">{app.patientName}</td>
+                      <td className="px-4 py-4 text-slate-500 text-xs whitespace-nowrap">
+                        {new Date(app.date).toLocaleDateString('en-US', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                      </td>
+                      <td className="px-4 py-4 text-slate-600 text-xs capitalize">
+                        {app.type === 'virtual' ? 'Virtual Consultation' : 'In-Person Visit'}
+                      </td>
+                      <td className="px-4 py-4 text-center">
+                        <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-red-50 text-red-400">
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 7V3.5L18.5 9H13zM6 4h6v5h5v11H6V4z"/>
+                          </svg>
+                        </span>
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button className="w-7 h-7 rounded-lg bg-slate-100 text-slate-500 flex items-center justify-center hover:bg-slate-200 transition">
+                            <span className="material-symbols-outlined" style={{ fontSize: '13px' }}>share</span>
+                          </button>
+                          <button className="w-7 h-7 rounded-lg bg-slate-100 text-slate-500 flex items-center justify-center hover:bg-slate-200 transition">
+                            <span className="material-symbols-outlined" style={{ fontSize: '13px' }}>download</span>
+                          </button>
+                          {app.status === 'pending' && (
+                            <button onClick={() => handleComplete(app.id)} className="w-7 h-7 rounded-lg bg-slate-900 text-white flex items-center justify-center hover:bg-black transition">
+                              <span className="material-symbols-outlined" style={{ fontSize: '13px' }}>check</span>
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Bottom charts row */}
+          <div className="grid grid-cols-2 gap-5">
+            {/* Daily Visitors */}
+            <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-bold text-slate-900 text-sm">Daily Visitors</h3>
+                <button className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center hover:bg-slate-200 transition">
+                  <span className="material-symbols-outlined text-slate-400" style={{ fontSize: '14px' }}>refresh</span>
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <div className="flex flex-col justify-between text-[9px] text-slate-300 font-bold py-1" style={{ minWidth: '36px' }}>
+                  <span>50-70</span>
+                  <span>25-50</span>
+                  <span>10-25</span>
+                  <span>0-10</span>
+                </div>
+                <div className="flex-1">
+                  <svg viewBox="0 0 220 72" className="w-full h-20" preserveAspectRatio="xMidYMid meet">
+                    <polyline
+                      points="10,62 42,52 74,42 106,24 138,36 170,14 202,20"
+                      fill="none" stroke="#A2F0D3" strokeWidth="2.5"
+                      strokeLinecap="round" strokeLinejoin="round"
+                    />
+                    <circle cx="106" cy="24" r="4" fill="#A2F0D3" stroke="white" strokeWidth="1.5" />
+                    <circle cx="170" cy="14" r="4" fill="#A2F0D3" stroke="white" strokeWidth="1.5" />
+                  </svg>
+                  <div className="flex justify-between text-[9px] text-slate-300 font-bold mt-1">
+                    {['S','M','T','W','T','F','S'].map((d, i) => <span key={i}>{d}</span>)}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Appointment Stats */}
+            <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-bold text-slate-900 text-sm">Appointment Stats</h3>
+                <div className="flex items-center gap-3">
+                  <span className="flex items-center gap-1 text-[10px] font-bold text-slate-500">
+                    <span className="w-2.5 h-2.5 rounded-full bg-orange-400 inline-block" /> Offline
+                  </span>
+                  <span className="flex items-center gap-1 text-[10px] font-bold text-slate-500">
+                    <span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block" /> Online
+                  </span>
+                </div>
+              </div>
+              <svg viewBox="0 0 210 72" className="w-full h-20" preserveAspectRatio="xMidYMid meet">
+                {[
+                  { off: 48, on: 44 },
+                  { off: 35, on: 56 },
+                  { off: 52, on: 48 },
+                  { off: 40, on: 60 },
+                  { off: 58, on: 40 },
+                  { off: 44, on: 52 },
+                  { off: 50, on: 58 },
+                ].map((day, i) => (
+                  <g key={i} transform={`translate(${i * 30 + 5}, 0)`}>
+                    <rect x="2"  y={72 - day.off} width="10" height={day.off} fill="#F97316" rx="3" opacity="0.85" />
+                    <rect x="14" y={72 - day.on}  width="10" height={day.on}  fill="#3B82F6" rx="3" opacity="0.85" />
+                  </g>
+                ))}
+              </svg>
+              <div className="flex justify-between text-[9px] text-slate-300 font-bold mt-1 px-2">
+                {['S','M','T','W','T','F','S'].map((d, i) => <span key={i}>{d}</span>)}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ── APPOINTMENTS SIDEBAR ── */}
+        <div className="w-72 shrink-0 flex flex-col">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden flex flex-col" style={{ maxHeight: 'calc(100vh - 120px)' }}>
+
+            {/* Header */}
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="font-black text-slate-900 text-sm">Appointments</h3>
+              <button className="flex items-center gap-1 text-xs font-bold text-slate-500 hover:text-slate-700 transition">
+                {selectedDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
+                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>expand_more</span>
+              </button>
+            </div>
+
+            {/* Date strip */}
+            <div className="px-3 py-3 flex items-center gap-1.5 border-b border-slate-50">
+              <button onClick={() => changeWeek(-1)} className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center hover:bg-slate-200 transition shrink-0">
+                <span className="material-symbols-outlined text-slate-500" style={{ fontSize: '15px' }}>chevron_left</span>
+              </button>
+              <div className="flex flex-1 gap-1">
+                {weekDates.slice(0, 5).map((date, i) => {
+                  const isSel = date.toDateString() === selectedDateStr;
+                  const isTod = date.toDateString() === today.toDateString();
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => setSelectedDate(date)}
+                      className={`flex flex-col items-center py-2 rounded-xl transition-all flex-1 ${
+                        isSel
+                          ? 'bg-[#A2F0D3] text-slate-900'
+                          : isTod
+                            ? 'bg-slate-900 text-white'
+                            : 'hover:bg-slate-50 text-slate-500'
+                      }`}
+                    >
+                      <span className="text-[8px] font-black uppercase leading-none">
+                        {['SUN','MON','TUE','WED','THU','FRI','SAT'][date.getDay()].slice(0, 3)}
+                      </span>
+                      <span className="text-base font-black leading-none mt-1">{date.getDate()}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <button onClick={() => changeWeek(1)} className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center hover:bg-slate-200 transition shrink-0">
+                <span className="material-symbols-outlined text-slate-500" style={{ fontSize: '15px' }}>chevron_right</span>
+              </button>
+            </div>
+
+            {/* Appointment list */}
+            <div className="overflow-y-auto flex-1 no-scrollbar">
+              {dayAppointments.length === 0 ? (
+                <div className="px-5 py-12 text-center">
+                  <span className="material-symbols-outlined block text-slate-200 mb-3" style={{ fontSize: '40px' }}>event_busy</span>
+                  <p className="text-slate-400 text-xs font-medium">No appointments for this day</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-50">
+                  {dayAppointments.map(app => (
+                    <div key={app.id} className="px-4 py-4 flex items-center gap-3 hover:bg-slate-50 transition cursor-pointer">
+                      <div className="w-10 h-10 rounded-full bg-slate-100 overflow-hidden shrink-0">
+                        <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${app.patientName}`} alt="" className="w-full h-full" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-slate-900 text-sm truncate leading-tight">{app.patientName}</p>
+                        <p
+                          className="text-[11px] font-bold mt-0.5 capitalize leading-tight"
+                          style={{ color: app.type === 'virtual' ? '#4B9FE1' : '#2dd4bf' }}
+                        >
+                          {app.type === 'virtual' ? 'Virtual Visit' : 'In-Person Visit'}
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0 flex flex-col items-end gap-1">
+                        <p className="text-xs font-bold text-slate-500">
+                          {new Date(app.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                        <button className="text-slate-300 hover:text-slate-500 transition">
+                          <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>more_vert</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="space-y-8 min-h-screen">
