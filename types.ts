@@ -57,3 +57,23 @@ export interface Review {
   comment: string;
   createdAt: string;
 }
+
+export interface Medication {
+  id: string;
+  patientId: string;
+  name: string;
+  dosage: string;      // e.g. "200 mg"
+  times: string[];     // e.g. ["09:00", "20:00"]
+  days: number[];      // 0=Sun … 6=Sat, empty means every day
+  active: boolean;
+  createdAt: string;
+}
+
+export interface MedicationLog {
+  id: string;
+  medicationId: string;
+  patientId: string;
+  date: string;        // "YYYY-MM-DD"
+  time: string;        // "HH:MM"
+  takenAt: string;     // ISO timestamp
+}

@@ -1,23 +1,24 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { db } from '../firebase';
-import { 
-  collection, 
-  query, 
-  where, 
-  getDocs, 
-  addDoc, 
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  addDoc,
   onSnapshot,
   doc,
   updateDoc,
   getDoc,
+  deleteDoc,
   limit
 } from 'firebase/firestore';
-import type { UserProfile, Appointment, Review, WorkingHours } from '../types';
+import type { UserProfile, Appointment, Review, WorkingHours, Medication, MedicationLog } from '../types';
 import { GoogleGenAI, Type } from "@google/genai";
 
 interface ClientBookingProps { profile: UserProfile; }
 
-type ViewState = 'home' | 'agenda' | 'specialist-list' | 'doctor-profile';
+type ViewState = 'home' | 'agenda' | 'specialist-list' | 'doctor-profile' | 'medications';
 
 const CATEGORIES_CONFIG = [
   { id: 'Medicine', icon: '🩺', color: 'bg-blue-600', specialties: ['Orthopedist', 'General Practitioner', 'ENT', 'Cardiologist', 'Pediatrician'] },
@@ -77,6 +78,18 @@ const ClientBooking: React.FC<ClientBookingProps> = ({ profile }) => {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiSuggestion, setAiSuggestion] = useState<{ category: string; specialty: string; reason: string } | null>(null);
 
+  // Medication state
+  const [medications, setMedications] = useState<Medication[]>([]);
+  const [medicationLogs, setMedicationLogs] = useState<MedicationLog[]>([]);
+  const [showAddMedModal, setShowAddMedModal] = useState(false);
+  const [medName, setMedName] = useState('');
+  const [medDosage, setMedDosage] = useState('');
+  const [medTimes, setMedTimes] = useState<string[]>(['09:00']);
+  const [medDays, setMedDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]);
+  const [savingMed, setSavingMed] = useState(false);
+  const [saveMedError, setSaveMedError] = useState('');
+  const [selectedMedDate, setSelectedMedDate] = useState(() => new Date().toISOString().split('T')[0]);
+
   useEffect(() => {
     const fetchDoctors = async () => {
       const q = query(collection(db, 'users'), where('role', '==', 'doctor'));
@@ -90,15 +103,25 @@ const ClientBooking: React.FC<ClientBookingProps> = ({ profile }) => {
     };
 
     const qApp = query(collection(db, 'appointments'), where('patientId', '==', profile.uid));
-    const unsubscribe = onSnapshot(qApp, (snapshot) => {
+    const unsubscribeApps = onSnapshot(qApp, (snapshot) => {
       const apps = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() } as Appointment));
       apps.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
       setMyAppointments(apps);
     });
 
+    const qMeds = query(collection(db, 'medications'), where('patientId', '==', profile.uid), where('active', '==', true));
+    const unsubscribeMeds = onSnapshot(qMeds, (snapshot) => {
+      setMedications(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Medication)));
+    });
+
+    const qLogs = query(collection(db, 'medicationLogs'), where('patientId', '==', profile.uid));
+    const unsubscribeLogs = onSnapshot(qLogs, (snapshot) => {
+      setMedicationLogs(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as MedicationLog)));
+    });
+
     fetchDoctors();
     generateAiHealthTips();
-    return () => unsubscribe();
+    return () => { unsubscribeApps(); unsubscribeMeds(); unsubscribeLogs(); };
   }, [profile.uid]);
 
   // Handle Fetching Doctor Info for Inspection
@@ -227,6 +250,211 @@ If unclear or emergency (chest pain, difficulty breathing, stroke symptoms), ret
       setAiSuggestion(null);
     }
   };
+
+  const handleSaveMedication = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!medName.trim() || !medDosage.trim() || medTimes.length === 0) return;
+    setSavingMed(true);
+    setSaveMedError('');
+    try {
+      await addDoc(collection(db, 'medications'), {
+        patientId: profile.uid,
+        name: medName.trim(),
+        dosage: medDosage.trim(),
+        times: medTimes,
+        days: medDays,
+        active: true,
+        createdAt: new Date().toISOString(),
+      });
+      setMedName(''); setMedDosage(''); setMedTimes(['09:00']); setMedDays([0,1,2,3,4,5,6]);
+      setShowAddMedModal(false);
+    } catch (err: any) {
+      console.error(err);
+      setSaveMedError(err?.message ?? 'Failed to save. Check Firestore rules.');
+    } finally { setSavingMed(false); }
+  };
+
+  const handleToggleTaken = async (med: Medication, time: string) => {
+    const dateKey = selectedMedDate;
+    const existing = medicationLogs.find(l => l.medicationId === med.id && l.date === dateKey && l.time === time);
+    if (existing) {
+      await deleteDoc(doc(db, 'medicationLogs', existing.id));
+    } else {
+      await addDoc(collection(db, 'medicationLogs'), {
+        medicationId: med.id,
+        patientId: profile.uid,
+        date: dateKey,
+        time,
+        takenAt: new Date().toISOString(),
+      });
+    }
+  };
+
+  const handleDeleteMedication = async (medId: string) => {
+    await updateDoc(doc(db, 'medications', medId), { active: false });
+  };
+
+  const isTaken = (medId: string, time: string) =>
+    medicationLogs.some(l => l.medicationId === medId && l.date === selectedMedDate && l.time === time);
+
+  // Returns the 7 days centred on today for the week strip
+  const weekDays = useMemo(() => {
+    const today = new Date();
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(today);
+      d.setDate(today.getDate() - 3 + i);
+      return d;
+    });
+  }, []);
+
+  // Medications scheduled for the selected date, grouped by time
+  const medsForSelectedDate = useMemo(() => {
+    const dayOfWeek = new Date(`${selectedMedDate}T12:00:00`).getDay();
+    const active = medications.filter(m => m.days.length === 0 || m.days.includes(dayOfWeek));
+    const timeMap: Record<string, Medication[]> = {};
+    active.forEach(m => {
+      m.times.forEach(t => {
+        if (!timeMap[t]) timeMap[t] = [];
+        timeMap[t].push(m);
+      });
+    });
+    return Object.entries(timeMap).sort(([a], [b]) => a.localeCompare(b));
+  }, [medications, selectedMedDate]);
+
+  const renderMedications = () => (
+    <div className="animate-in fade-in duration-500 pb-32">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-3xl font-black text-white tracking-tighter">Medications</h1>
+        <button
+          onClick={() => setShowAddMedModal(true)}
+          className="flex items-center gap-2 px-4 py-2.5 bg-[#A2F0D3] text-black rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 active:scale-95 transition-all"
+        >
+          <span className="material-symbols-outlined text-[18px]">add</span>
+          Add
+        </button>
+      </div>
+
+      {/* Week Day Strip */}
+      <div className="flex gap-2 mb-8 overflow-x-auto pb-1">
+        {weekDays.map((d) => {
+          const iso = d.toISOString().split('T')[0];
+          const isSelected = iso === selectedMedDate;
+          const isToday = iso === new Date().toISOString().split('T')[0];
+          return (
+            <button
+              key={iso}
+              onClick={() => setSelectedMedDate(iso)}
+              className={`flex flex-col items-center min-w-[52px] py-3 px-1 rounded-2xl transition-all font-black ${
+                isSelected
+                  ? 'bg-[#A2F0D3] text-black scale-105 shadow-lg shadow-[#A2F0D3]/20'
+                  : 'bg-white/5 border border-slate-800 text-slate-400 hover:border-slate-600'
+              }`}
+            >
+              <span className="text-[10px] uppercase tracking-widest">
+                {d.toLocaleDateString('en', { weekday: 'short' })}
+              </span>
+              <span className={`text-lg mt-0.5 ${isSelected ? 'text-black' : isToday ? 'text-[#A2F0D3]' : ''}`}>
+                {d.getDate()}
+              </span>
+              {isToday && !isSelected && <span className="w-1 h-1 rounded-full bg-[#A2F0D3] mt-1" />}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Selected day label */}
+      <p className="text-xs font-black uppercase tracking-[0.25em] text-slate-500 mb-6">
+        {new Date(`${selectedMedDate}T12:00:00`).toLocaleDateString('en', { weekday: 'long', month: 'long', day: 'numeric' })}
+      </p>
+
+      {/* Medication list grouped by time */}
+      {medsForSelectedDate.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-24 text-center">
+          <div className="w-20 h-20 rounded-3xl bg-white/5 border border-slate-800 flex items-center justify-center mb-6">
+            <span className="material-symbols-outlined text-slate-600 text-4xl">medication</span>
+          </div>
+          <p className="text-white font-black text-lg">No medications today</p>
+          <p className="text-slate-500 text-sm mt-2">Tap Add to log a new medication.</p>
+        </div>
+      ) : (
+        <div className="space-y-8">
+          {medsForSelectedDate.map(([time, meds]) => (
+            <div key={time}>
+              <p className="text-sm font-black text-slate-400 mb-3 tracking-widest">{time}</p>
+              <div className="space-y-3">
+                {meds.map(med => {
+                  const taken = isTaken(med.id, time);
+                  return (
+                    <div
+                      key={`${med.id}-${time}`}
+                      className={`flex items-center justify-between p-5 rounded-3xl border transition-all ${
+                        taken
+                          ? 'bg-[#A2F0D3]/10 border-[#A2F0D3]/20'
+                          : 'bg-white/5 border-slate-800'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${taken ? 'bg-[#A2F0D3]' : 'bg-white/10'}`}>
+                          {taken
+                            ? <span className="material-symbols-outlined text-black text-[20px]">check</span>
+                            : <span className="material-symbols-outlined text-slate-400 text-[20px]">medication</span>
+                          }
+                        </div>
+                        <div>
+                          <p className={`font-black text-sm ${taken ? 'text-slate-400 line-through' : 'text-white'}`}>{med.name}</p>
+                          <p className="text-slate-500 text-xs mt-0.5">{med.dosage} · Take 1</p>
+                          {taken && <p className="text-[#A2F0D3] text-[10px] font-black uppercase tracking-widest mt-0.5">Taken</p>}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleToggleTaken(med, time)}
+                          className={`px-5 py-2 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${
+                            taken
+                              ? 'bg-white/10 text-slate-400 hover:bg-white/20'
+                              : 'bg-[#A2F0D3] text-black hover:scale-105 active:scale-95 shadow-md shadow-[#A2F0D3]/20'
+                          }`}
+                        >
+                          {taken ? 'Un-take' : 'Take'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Manage section — list all active meds */}
+      {medications.length > 0 && (
+        <div className="mt-12">
+          <p className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-500 mb-4 flex items-center">
+            <span className="w-8 h-px bg-slate-800 mr-4" />
+            All Active Medications
+          </p>
+          <div className="space-y-2">
+            {medications.map(med => (
+              <div key={med.id} className="flex items-center justify-between bg-white/5 border border-slate-800 rounded-2xl px-5 py-4">
+                <div>
+                  <p className="text-white font-black text-sm">{med.name}</p>
+                  <p className="text-slate-500 text-xs mt-0.5">{med.dosage} · {med.times.join(', ')}</p>
+                </div>
+                <button
+                  onClick={() => handleDeleteMedication(med.id)}
+                  className="w-9 h-9 rounded-xl bg-red-600/10 border border-red-600/20 flex items-center justify-center text-red-500 hover:bg-red-600 hover:text-white transition-all"
+                >
+                  <span className="material-symbols-outlined text-[18px]">delete</span>
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 
   const handleBooking = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -785,10 +1013,97 @@ If unclear or emergency (chest pain, difficulty breathing, stroke symptoms), ret
         </div>
       )}
 
-      {currentView === 'home' ? renderHome() : 
-       currentView === 'agenda' ? renderAgenda() : 
+      {currentView === 'home' ? renderHome() :
+       currentView === 'agenda' ? renderAgenda() :
        currentView === 'specialist-list' ? renderSpecialistList() :
-       currentView === 'doctor-profile' ? renderDoctorProfile() : null}
+       currentView === 'doctor-profile' ? renderDoctorProfile() :
+       currentView === 'medications' ? renderMedications() : null}
+
+      {/* Add Medication Modal */}
+      {showAddMedModal && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-3xl flex items-end sm:items-center justify-center p-0 sm:p-6 z-[900] animate-in fade-in">
+          <div className="bg-[#1e2124] rounded-t-[3rem] sm:rounded-[3rem] border border-slate-800 w-full sm:max-w-md p-8 shadow-2xl animate-in slide-in-from-bottom-6">
+            <div className="flex items-center justify-between mb-8">
+              <h2 className="text-2xl font-black text-white tracking-tighter">Add Medication</h2>
+              <button onClick={() => setShowAddMedModal(false)} className="w-10 h-10 rounded-full bg-white/5 border border-slate-800 flex items-center justify-center text-slate-400 hover:text-white transition-colors">
+                <span className="material-symbols-outlined text-[18px]">close</span>
+              </button>
+            </div>
+            <form onSubmit={handleSaveMedication} className="space-y-5">
+              <div>
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 block mb-2">Medication Name</label>
+                <input
+                  value={medName}
+                  onChange={e => setMedName(e.target.value)}
+                  placeholder="e.g. Advil"
+                  className="w-full bg-white/5 border border-slate-800 rounded-2xl px-5 py-3.5 text-white placeholder-slate-600 outline-none focus:border-[#A2F0D3]/50 transition-colors"
+                  required
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 block mb-2">Dosage</label>
+                <input
+                  value={medDosage}
+                  onChange={e => setMedDosage(e.target.value)}
+                  placeholder="e.g. 200 mg"
+                  className="w-full bg-white/5 border border-slate-800 rounded-2xl px-5 py-3.5 text-white placeholder-slate-600 outline-none focus:border-[#A2F0D3]/50 transition-colors"
+                  required
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 block mb-2">Reminder Times</label>
+                <div className="space-y-2">
+                  {medTimes.map((t, i) => (
+                    <div key={i} className="flex gap-2">
+                      <input
+                        type="time"
+                        value={t}
+                        onChange={e => setMedTimes(prev => prev.map((v, idx) => idx === i ? e.target.value : v))}
+                        className="flex-1 bg-white/5 border border-slate-800 rounded-2xl px-5 py-3 text-white outline-none focus:border-[#A2F0D3]/50 transition-colors"
+                      />
+                      {medTimes.length > 1 && (
+                        <button type="button" onClick={() => setMedTimes(prev => prev.filter((_, idx) => idx !== i))}
+                          className="w-11 h-11 rounded-xl bg-red-600/10 border border-red-600/20 text-red-500 flex items-center justify-center hover:bg-red-600 hover:text-white transition-all">
+                          <span className="material-symbols-outlined text-[18px]">remove</span>
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <button type="button" onClick={() => setMedTimes(prev => [...prev, '12:00'])}
+                    className="w-full py-2.5 border border-dashed border-slate-700 rounded-2xl text-slate-500 text-xs font-black uppercase tracking-widest hover:border-slate-500 hover:text-slate-300 transition-colors">
+                    + Add time slot
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 block mb-2">Days</label>
+                <div className="flex gap-2 flex-wrap">
+                  {['Su','Mo','Tu','We','Th','Fr','Sa'].map((label, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setMedDays(prev => prev.includes(i) ? prev.filter(d => d !== i) : [...prev, i])}
+                      className={`w-10 h-10 rounded-full font-black text-xs transition-all ${medDays.includes(i) ? 'bg-[#A2F0D3] text-black' : 'bg-white/5 border border-slate-800 text-slate-400'}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {saveMedError && (
+                <p className="text-red-400 text-xs font-bold bg-red-900/10 border border-red-900/20 rounded-2xl px-4 py-3">{saveMedError}</p>
+              )}
+              <button
+                type="submit"
+                disabled={savingMed}
+                className="w-full py-4 bg-[#A2F0D3] text-black rounded-2xl font-black text-sm uppercase tracking-widest hover:scale-[1.02] active:scale-[0.98] transition-all shadow-lg disabled:opacity-60 mt-2"
+              >
+                {savingMed ? 'Saving…' : 'Save Medication'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* AI Symptom Bot FAB */}
       <button
@@ -862,13 +1177,17 @@ If unclear or emergency (chest pain, difficulty breathing, stroke symptoms), ret
         </div>
       )}
 
-      <nav className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-[#1e2124]/70 backdrop-blur-2xl border border-slate-800 h-20 rounded-[2.5rem] flex items-center px-4 z-50 shadow-2xl min-w-[320px]">
+      <nav className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-[#1e2124]/70 backdrop-blur-2xl border border-slate-800 h-20 rounded-[2.5rem] flex items-center px-4 z-50 shadow-2xl min-w-[360px]">
         <div className="flex w-full justify-around items-center">
-          <button onClick={() => { setViewingDoctor(null); setInspectingApp(null); setCurrentView('home'); }} className={`flex flex-col items-center px-6 py-2 rounded-2xl transition-all ${currentView === 'home' || currentView === 'specialist-list' ? 'text-[#A2F0D3] scale-110' : 'text-slate-600'}`}>
+          <button onClick={() => { setViewingDoctor(null); setInspectingApp(null); setCurrentView('home'); }} className={`flex flex-col items-center px-5 py-2 rounded-2xl transition-all ${currentView === 'home' || currentView === 'specialist-list' ? 'text-[#A2F0D3] scale-110' : 'text-slate-600'}`}>
             <span className="material-symbols-outlined font-black">home</span>
             <span className="text-[10px] mt-1 font-black uppercase tracking-tighter">Home</span>
           </button>
-          <button onClick={() => { setViewingDoctor(null); setInspectingApp(null); setCurrentView('agenda'); }} className={`flex flex-col items-center px-6 py-2 rounded-2xl transition-all ${currentView === 'agenda' || currentView === 'doctor-profile' ? 'text-[#A2F0D3] scale-110' : 'text-slate-600'}`}>
+          <button onClick={() => { setViewingDoctor(null); setInspectingApp(null); setCurrentView('medications'); }} className={`flex flex-col items-center px-5 py-2 rounded-2xl transition-all ${currentView === 'medications' ? 'text-[#A2F0D3] scale-110' : 'text-slate-600'}`}>
+            <span className="material-symbols-outlined font-black">medication</span>
+            <span className="text-[10px] mt-1 font-black uppercase tracking-tighter">Meds</span>
+          </button>
+          <button onClick={() => { setViewingDoctor(null); setInspectingApp(null); setCurrentView('agenda'); }} className={`flex flex-col items-center px-5 py-2 rounded-2xl transition-all ${currentView === 'agenda' || currentView === 'doctor-profile' ? 'text-[#A2F0D3] scale-110' : 'text-slate-600'}`}>
             <span className="material-symbols-outlined font-black">calendar_today</span>
             <span className="text-[10px] mt-1 font-black uppercase tracking-tighter">Agenda</span>
           </button>
