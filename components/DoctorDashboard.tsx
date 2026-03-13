@@ -17,7 +17,19 @@ interface DoctorDashboardProps {
   profile: UserProfile;
 }
 
-type DoctorView = 'overview' | 'profile' | 'schedule' | 'rooms';
+type DoctorView = 'overview' | 'profile' | 'schedule' | 'rooms' | 'news';
+
+// ── GNews API ──────────────────────────────────────────────────────────────
+const GNEWS_API_KEY = 'd2fa1f58518f72e72a8dff6cddf04781';
+
+interface NewsArticle {
+  title: string;
+  description: string;
+  url: string;
+  image: string | null;
+  publishedAt: string;
+  source: { name: string; url: string };
+}
 
 type RoomAmenity =
   | 'wifi'
@@ -87,6 +99,12 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editData, setEditData] = useState<Partial<UserProfile>>({});
   const [saving, setSaving] = useState(false);
+
+  // News state
+  const [news, setNews] = useState<NewsArticle[]>([]);
+  const [newsLoading, setNewsLoading] = useState(false);
+  const [newsError, setNewsError] = useState<string | null>(null);
+  const [newsRefreshKey, setNewsRefreshKey] = useState(0);
 
   const profileInputRef = useRef<HTMLInputElement>(null);
   const backgroundInputRef = useRef<HTMLInputElement>(null);
@@ -178,6 +196,43 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
 
     return () => unsubscribe();
   }, [currentView]);
+
+  // News fetch
+  const getNewsTopic = () => {
+    const raw = `${profile.specialty || ''} ${profile.category || ''}`.toLowerCase();
+    if (raw.includes('cardio'))                          return 'cardiology';
+    if (raw.includes('psych') || raw.includes('mental')) return 'psychiatry mental health';
+    if (raw.includes('neurol'))                          return 'neurology';
+    if (raw.includes('pediatr') || raw.includes('paediatr')) return 'pediatrics children health';
+    if (raw.includes('oncol'))                           return 'oncology cancer';
+    if (raw.includes('ortho'))                           return 'orthopedics';
+    if (raw.includes('dermat'))                          return 'dermatology skin';
+    if (raw.includes('ophthalm') || raw.includes('eye')) return 'ophthalmology';
+    if (raw.includes('gastro'))                          return 'gastroenterology';
+    if (raw.includes('endocrin'))                        return 'endocrinology diabetes';
+    if (raw.includes('urol'))                            return 'urology';
+    if (raw.includes('rheumat'))                         return 'rheumatology';
+    if (raw.includes('pulmon') || raw.includes('lung') || raw.includes('respir')) return 'pulmonology respiratory';
+    return 'medicine health';
+  };
+
+  useEffect(() => {
+    if (currentView !== 'news') return;
+    if (!GNEWS_API_KEY) { setNews([]); return; }
+
+    setNewsLoading(true);
+    setNewsError(null);
+    const topic = getNewsTopic();
+    fetch(`https://gnews.io/api/v4/search?q=${encodeURIComponent(topic)}&lang=en&max=10&apikey=${GNEWS_API_KEY}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.errors?.length) throw new Error(data.errors[0]);
+        setNews(data.articles || []);
+      })
+      .catch(() => setNewsError('Failed to load news. Check your GNews API key or try again.'))
+      .finally(() => setNewsLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentView, newsRefreshKey]);
 
   // Calendar Helpers
   const weekDates = useMemo(() => {
@@ -837,6 +892,140 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
     </div>
   );
 
+  const renderNews = () => {
+    const topic = getNewsTopic();
+    const topicLabel = topic.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+
+    return (
+      <div className="space-y-8 animate-in fade-in duration-500">
+        <header className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-500">Your feed</p>
+            <h1 className="text-4xl font-black text-slate-900 tracking-tighter">{topicLabel} News</h1>
+            <p className="text-slate-500 text-sm mt-2 font-medium">
+              Latest headlines tailored to your specialization.
+            </p>
+          </div>
+          <button
+            onClick={() => setNewsRefreshKey(k => k + 1)}
+            disabled={newsLoading}
+            className="flex items-center gap-2 px-6 py-3 bg-slate-900 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-black transition-colors shadow-lg disabled:opacity-50 shrink-0"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: '15px' }}>refresh</span>
+            Refresh
+          </button>
+        </header>
+
+        {/* No API key */}
+        {!GNEWS_API_KEY && (
+          <div className="bg-amber-50 border border-amber-200 rounded-[2.5rem] p-10">
+            <div className="flex items-start gap-5">
+              <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined" style={{ fontSize: '24px' }}>key</span>
+              </div>
+              <div className="space-y-3">
+                <h3 className="text-slate-900 font-black text-lg tracking-tight">API key required</h3>
+                <p className="text-slate-600 text-sm leading-relaxed">
+                  To load live news, add a free GNews API key to <span className="font-mono bg-amber-100 px-2 py-0.5 rounded text-xs">DoctorDashboard.tsx</span>:
+                </p>
+                <ol className="space-y-1.5 text-sm text-slate-600 list-decimal list-inside">
+                  <li>Go to <span className="font-black text-slate-900">gnews.io</span> and create a free account</li>
+                  <li>Copy your API key from the dashboard</li>
+                  <li>Paste it in the <span className="font-mono bg-amber-100 px-1.5 py-0.5 rounded text-xs">GNEWS_API_KEY</span> constant at the top of the component</li>
+                </ol>
+                <p className="text-slate-400 text-xs">Free tier: 100 requests/day · No credit card required</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Loading skeleton */}
+        {newsLoading && GNEWS_API_KEY && (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="bg-white rounded-[2.5rem] border border-slate-100 shadow-sm overflow-hidden animate-pulse">
+                <div className="h-44 bg-slate-100" />
+                <div className="p-6 space-y-3">
+                  <div className="h-3 bg-slate-100 rounded-full w-1/3" />
+                  <div className="h-5 bg-slate-100 rounded-full w-full" />
+                  <div className="h-5 bg-slate-100 rounded-full w-4/5" />
+                  <div className="h-3 bg-slate-100 rounded-full w-2/3 mt-2" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Error */}
+        {newsError && (
+          <div className="bg-red-50 border border-red-200 rounded-[2.5rem] p-10 text-center space-y-3">
+            <span className="material-symbols-outlined block text-red-300" style={{ fontSize: '48px' }}>wifi_off</span>
+            <p className="text-red-700 font-black">{newsError}</p>
+            <button onClick={() => setNewsRefreshKey(k => k + 1)} className="px-6 py-3 bg-red-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-red-500 transition-colors">
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* Articles grid */}
+        {!newsLoading && !newsError && news.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+            {news.map((article, i) => (
+              <a
+                key={i}
+                href={article.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`bg-white rounded-[2.5rem] border border-slate-200 shadow-sm overflow-hidden group hover:shadow-lg hover:-translate-y-1 transition-all duration-300 flex flex-col ${i === 0 ? 'md:col-span-2' : ''}`}
+              >
+                <div className={`${i === 0 ? 'h-64' : 'h-44'} bg-slate-100 relative overflow-hidden`}>
+                  {article.image ? (
+                    <img src={article.image} alt="" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200">
+                      <span className="material-symbols-outlined text-slate-300" style={{ fontSize: '48px' }}>article</span>
+                    </div>
+                  )}
+                  <div className="absolute top-4 left-4">
+                    <span className="bg-white/90 backdrop-blur-md text-slate-700 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full border border-slate-200">
+                      {article.source.name}
+                    </span>
+                  </div>
+                </div>
+                <div className="p-6 flex flex-col flex-1 gap-3">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                    {new Date(article.publishedAt).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  </p>
+                  <h3 className={`font-black text-slate-900 leading-tight tracking-tight group-hover:text-blue-600 transition-colors ${i === 0 ? 'text-2xl' : 'text-base'}`}>
+                    {article.title}
+                  </h3>
+                  {article.description && (
+                    <p className="text-slate-500 text-sm leading-relaxed line-clamp-2 flex-1">{article.description}</p>
+                  )}
+                  <div className="flex items-center gap-2 pt-2 text-blue-600 text-[10px] font-black uppercase tracking-widest">
+                    Read article
+                    <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>arrow_forward</span>
+                  </div>
+                </div>
+              </a>
+            ))}
+          </div>
+        )}
+
+        {/* Empty */}
+        {!newsLoading && !newsError && GNEWS_API_KEY && news.length === 0 && (
+          <div className="bg-white border border-slate-200 rounded-[2.5rem] p-12 text-center space-y-3">
+            <span className="material-symbols-outlined block text-slate-200" style={{ fontSize: '48px' }}>newspaper</span>
+            <p className="text-slate-500 font-bold text-sm">No articles found for your specialization</p>
+            <button onClick={() => setNewsRefreshKey(k => k + 1)} className="px-6 py-3 bg-slate-900 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest">
+              Try again
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderPatientPanel = () => {
     if (!selectedPatient) return null;
 
@@ -1345,6 +1534,7 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
     { view: 'overview',  label: 'Dashboard',    icon: 'grid_view'      },
     { view: 'schedule',  label: 'Appointments', icon: 'calendar_month' },
     { view: 'rooms',     label: 'Rooms',        icon: 'meeting_room'   },
+    { view: 'news',      label: 'News',         icon: 'newspaper'      },
     { view: 'profile',   label: 'Profile',      icon: 'person'         },
   ];
 
@@ -1352,6 +1542,7 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
     overview: 'Dashboard',
     schedule: 'Appointments',
     rooms:    'Rooms',
+    news:     'News',
     profile:  'Profile',
   };
 
@@ -1443,7 +1634,9 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
               ? renderSchedule()
               : currentView === 'rooms'
                 ? renderRooms()
-                : renderProfile()}
+                : currentView === 'news'
+                  ? renderNews()
+                  : renderProfile()}
         </main>
       </div>
     </div>
