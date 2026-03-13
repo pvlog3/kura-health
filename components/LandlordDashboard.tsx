@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { db } from '../firebase';
+import { db, storage } from '../firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import {
   addDoc,
   collection,
@@ -7,6 +8,7 @@ import {
   doc,
   onSnapshot,
   query,
+  updateDoc,
   where,
 } from 'firebase/firestore';
 import type { UserProfile, WorkingHours } from '../types';
@@ -55,9 +57,6 @@ const emptyForm = {
   address: '',
   city: '',
   hourlyRate: '',
-  photo1: '',
-  photo2: '',
-  photo3: '',
   notes: '',
   available: true,
   amenities: new Set<Amenity>(),
@@ -72,6 +71,8 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
   const [error, setError] = useState<string | null>(null);
 
   const [form, setForm] = useState(emptyForm);
+  const [photoFiles, setPhotoFiles] = useState<(File | null)[]>([null, null, null]);
+  const [photoPreviews, setPhotoPreviews] = useState<(string | null)[]>([null, null, null]);
   const [submitting, setSubmitting] = useState(false);
   const [search, setSearch] = useState('');
   const [currentView, setCurrentView] = useState<LandlordView>('create');
@@ -114,6 +115,14 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     return myRooms.filter((r) => `${r.name} ${r.city} ${r.address}`.toLowerCase().includes(q));
   }, [myRooms, search]);
 
+  const handlePhotoFile = (e: React.ChangeEvent<HTMLInputElement>, index: number) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const preview = URL.createObjectURL(file);
+    setPhotoFiles(prev => { const next = [...prev]; next[index] = file; return next; });
+    setPhotoPreviews(prev => { const next = [...prev]; next[index] = preview; return next; });
+  };
+
   const toggleAmenity = (id: Amenity) => {
     setForm((prev) => {
       const next = { ...prev, amenities: new Set(prev.amenities) };
@@ -133,8 +142,6 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
       return;
     }
 
-    const photos = [form.photo1, form.photo2, form.photo3].map((p) => p.trim()).filter(Boolean);
-
     const availability: WorkingHours = {
       start: form.hoursStart,
       end: form.hoursEnd,
@@ -144,27 +151,45 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     setSubmitting(true);
     try {
       const listingName = form.name.trim();
-      await addDoc(collection(db, 'rooms'), {
+      // Create the room doc first to get its ID
+      const roomRef = await addDoc(collection(db, 'rooms'), {
         ownerId: profile.uid,
         ownerName: profile.name,
         name: listingName,
         address: form.address.trim(),
         city: form.city.trim(),
         hourlyRate: hourly,
-        photos,
+        photos: [],
         amenities: Array.from(form.amenities),
         notes: form.notes.trim() ? form.notes.trim() : null,
         available: form.available,
         createdAt: new Date().toISOString(),
         availability,
       });
+
+      // Upload any selected photos to Firebase Storage
+      const uploadedUrls: string[] = [];
+      for (let i = 0; i < photoFiles.length; i++) {
+        const file = photoFiles[i];
+        if (!file) continue;
+        const storageRef = ref(storage, `rooms/${roomRef.id}/photo${i + 1}`);
+        await uploadBytes(storageRef, file);
+        const url = await getDownloadURL(storageRef);
+        uploadedUrls.push(url);
+      }
+      if (uploadedUrls.length > 0) {
+        await updateDoc(doc(db, 'rooms', roomRef.id), { photos: uploadedUrls });
+      }
+
       setForm(emptyForm);
+      setPhotoFiles([null, null, null]);
+      setPhotoPreviews([null, null, null]);
       setPublishedName(listingName);
       setShowPublishSuccess(true);
       setCurrentView('rooms');
     } catch (e) {
       console.error('Create room error:', e);
-      alert('Failed to publish listing. Check Firestore rules and try again.');
+      alert('Failed to publish listing. Check Firestore/Storage rules and try again.');
     } finally {
       setSubmitting(false);
     }
@@ -365,30 +390,31 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
 
           <div className="space-y-8">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-3">Photos (URLs)</p>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <input
-                  value={form.photo1}
-                  onChange={(e) => setForm((p) => ({ ...p, photo1: e.target.value }))}
-                  placeholder="Photo 1"
-                  className="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-xs outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-                />
-                <input
-                  value={form.photo2}
-                  onChange={(e) => setForm((p) => ({ ...p, photo2: e.target.value }))}
-                  placeholder="Photo 2"
-                  className="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-xs outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-                />
-                <input
-                  value={form.photo3}
-                  onChange={(e) => setForm((p) => ({ ...p, photo3: e.target.value }))}
-                  placeholder="Photo 3"
-                  className="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-xs outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-                />
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-3">Photos</p>
+              <div className="grid grid-cols-3 gap-3">
+                {[0, 1, 2].map((i) => (
+                  <label
+                    key={i}
+                    className="relative h-32 rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 hover:bg-slate-100 hover:border-blue-300 cursor-pointer transition-all overflow-hidden flex flex-col items-center justify-center gap-2"
+                  >
+                    {photoPreviews[i] ? (
+                      <img src={photoPreviews[i]!} alt={`Photo ${i + 1}`} className="absolute inset-0 w-full h-full object-cover rounded-2xl" />
+                    ) : (
+                      <>
+                        <span className="material-symbols-outlined text-slate-300" style={{ fontSize: '28px' }}>add_photo_alternate</span>
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Photo {i + 1}</span>
+                      </>
+                    )}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => handlePhotoFile(e, i)}
+                    />
+                  </label>
+                ))}
               </div>
-              <p className="text-slate-400 text-xs mt-3">
-                Tip: Use public image URLs. You can add Firebase Storage later.
-              </p>
+              <p className="text-slate-400 text-xs mt-3">Click a box to upload a photo from your device.</p>
             </div>
 
             <div>
@@ -418,7 +444,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
             <div className="flex gap-4">
               <button
                 type="button"
-                onClick={() => setForm(emptyForm)}
+                onClick={() => { setForm(emptyForm); setPhotoFiles([null, null, null]); setPhotoPreviews([null, null, null]); }}
                 className="flex-1 py-4 rounded-2xl border border-slate-200 text-slate-600 font-black uppercase text-[10px] tracking-widest hover:bg-slate-50 transition-colors"
               >
                 Reset

@@ -3,6 +3,7 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBAtZtO0WAQvJn2GX0GwxVOhoPdrBdMZ6Q",
@@ -24,5 +25,6 @@ const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 // Initialize services linked to the singleton instance
 const auth = getAuth(app);
 const db = getFirestore(app);
+const storage = getStorage(app);
 
-export { auth, db };
+export { auth, db, storage };
