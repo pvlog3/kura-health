@@ -19,16 +19,15 @@ interface DoctorDashboardProps {
 
 type DoctorView = 'overview' | 'profile' | 'schedule' | 'rooms' | 'news';
 
-// ── GNews API ──────────────────────────────────────────────────────────────
-const GNEWS_API_KEY = 'd2fa1f58518f72e72a8dff6cddf04781';
-
+// ── News via rss2json.com + ScienceDaily RSS (no API key needed) ──────────
 interface NewsArticle {
   title: string;
   description: string;
-  url: string;
-  image: string | null;
-  publishedAt: string;
-  source: { name: string; url: string };
+  link: string;
+  thumbnail: string;
+  pubDate: string;
+  author: string;
+  categories: string[];
 }
 
 type RoomAmenity =
@@ -198,38 +197,44 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
   }, [currentView]);
 
   // News fetch
-  const getNewsTopic = () => {
+  const getNewsFeed = (): { url: string; label: string } => {
     const raw = `${profile.specialty || ''} ${profile.category || ''}`.toLowerCase();
-    if (raw.includes('cardio'))                          return 'cardiology';
-    if (raw.includes('psych') || raw.includes('mental')) return 'psychiatry mental health';
-    if (raw.includes('neurol'))                          return 'neurology';
-    if (raw.includes('pediatr') || raw.includes('paediatr')) return 'pediatrics children health';
-    if (raw.includes('oncol'))                           return 'oncology cancer';
-    if (raw.includes('ortho'))                           return 'orthopedics';
-    if (raw.includes('dermat'))                          return 'dermatology skin';
-    if (raw.includes('ophthalm') || raw.includes('eye')) return 'ophthalmology';
-    if (raw.includes('gastro'))                          return 'gastroenterology';
-    if (raw.includes('endocrin'))                        return 'endocrinology diabetes';
-    if (raw.includes('urol'))                            return 'urology';
-    if (raw.includes('rheumat'))                         return 'rheumatology';
-    if (raw.includes('pulmon') || raw.includes('lung') || raw.includes('respir')) return 'pulmonology respiratory';
-    return 'medicine health';
+    if (raw.includes('cardio'))
+      return { url: 'https://www.sciencedaily.com/rss/health_medicine/cardiovascular_disease.xml', label: 'Cardiology' };
+    if (raw.includes('psych') || raw.includes('mental'))
+      return { url: 'https://www.sciencedaily.com/rss/health_medicine/psychology.xml', label: 'Psychology' };
+    if (raw.includes('neurol') || raw.includes('brain'))
+      return { url: 'https://www.sciencedaily.com/rss/health_medicine/neuroscience.xml', label: 'Neurology' };
+    if (raw.includes('pediatr') || raw.includes('paediatr') || raw.includes('child'))
+      return { url: 'https://www.sciencedaily.com/rss/health_medicine/children_s_health.xml', label: 'Pediatrics' };
+    if (raw.includes('oncol') || raw.includes('cancer'))
+      return { url: 'https://www.sciencedaily.com/rss/health_medicine/cancer.xml', label: 'Oncology' };
+    if (raw.includes('ortho'))
+      return { url: 'https://www.sciencedaily.com/rss/health_medicine/sports_medicine.xml', label: 'Orthopedics' };
+    if (raw.includes('dermat') || raw.includes('skin'))
+      return { url: 'https://www.sciencedaily.com/rss/health_medicine/skin_care.xml', label: 'Dermatology' };
+    if (raw.includes('diabet') || raw.includes('endocrin'))
+      return { url: 'https://www.sciencedaily.com/rss/health_medicine/diabetes.xml', label: 'Endocrinology' };
+    if (raw.includes('infect') || raw.includes('immun'))
+      return { url: 'https://www.sciencedaily.com/rss/health_medicine/infectious_diseases.xml', label: 'Infectious Disease' };
+    if (raw.includes('gastro') || raw.includes('digest'))
+      return { url: 'https://www.sciencedaily.com/rss/health_medicine/gastrointestinal_disease.xml', label: 'Gastroenterology' };
+    return { url: 'https://www.sciencedaily.com/rss/health_medicine.xml', label: 'Medicine' };
   };
 
   useEffect(() => {
     if (currentView !== 'news') return;
-    if (!GNEWS_API_KEY) { setNews([]); return; }
 
     setNewsLoading(true);
     setNewsError(null);
-    const topic = getNewsTopic();
-    fetch(`https://gnews.io/api/v4/search?q=${encodeURIComponent(topic)}&lang=en&max=10&apikey=${GNEWS_API_KEY}`)
+    const { url } = getNewsFeed();
+    fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}&count=12`)
       .then(r => r.json())
       .then(data => {
-        if (data.errors?.length) throw new Error(data.errors[0]);
-        setNews(data.articles || []);
+        if (data.status !== 'ok') throw new Error('Feed unavailable');
+        setNews(data.items || []);
       })
-      .catch(() => setNewsError('Failed to load news. Check your GNews API key or try again.'))
+      .catch(() => setNewsError('Failed to load news. Please try again.'))
       .finally(() => setNewsLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentView, newsRefreshKey]);
@@ -893,8 +898,7 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
   );
 
   const renderNews = () => {
-    const topic = getNewsTopic();
-    const topicLabel = topic.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    const { label: topicLabel } = getNewsFeed();
 
     return (
       <div className="space-y-8 animate-in fade-in duration-500">
@@ -916,31 +920,8 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
           </button>
         </header>
 
-        {/* No API key */}
-        {!GNEWS_API_KEY && (
-          <div className="bg-amber-50 border border-amber-200 rounded-[2.5rem] p-10">
-            <div className="flex items-start gap-5">
-              <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
-                <span className="material-symbols-outlined" style={{ fontSize: '24px' }}>key</span>
-              </div>
-              <div className="space-y-3">
-                <h3 className="text-slate-900 font-black text-lg tracking-tight">API key required</h3>
-                <p className="text-slate-600 text-sm leading-relaxed">
-                  To load live news, add a free GNews API key to <span className="font-mono bg-amber-100 px-2 py-0.5 rounded text-xs">DoctorDashboard.tsx</span>:
-                </p>
-                <ol className="space-y-1.5 text-sm text-slate-600 list-decimal list-inside">
-                  <li>Go to <span className="font-black text-slate-900">gnews.io</span> and create a free account</li>
-                  <li>Copy your API key from the dashboard</li>
-                  <li>Paste it in the <span className="font-mono bg-amber-100 px-1.5 py-0.5 rounded text-xs">GNEWS_API_KEY</span> constant at the top of the component</li>
-                </ol>
-                <p className="text-slate-400 text-xs">Free tier: 100 requests/day · No credit card required</p>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Loading skeleton */}
-        {newsLoading && GNEWS_API_KEY && (
+        {newsLoading && (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="bg-white rounded-[2.5rem] border border-slate-100 shadow-sm overflow-hidden animate-pulse">
@@ -973,28 +954,30 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
             {news.map((article, i) => (
               <a
                 key={i}
-                href={article.url}
+                href={article.link}
                 target="_blank"
                 rel="noopener noreferrer"
                 className={`bg-white rounded-[2.5rem] border border-slate-200 shadow-sm overflow-hidden group hover:shadow-lg hover:-translate-y-1 transition-all duration-300 flex flex-col ${i === 0 ? 'md:col-span-2' : ''}`}
               >
                 <div className={`${i === 0 ? 'h-64' : 'h-44'} bg-slate-100 relative overflow-hidden`}>
-                  {article.image ? (
-                    <img src={article.image} alt="" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                  {article.thumbnail ? (
+                    <img src={article.thumbnail} alt="" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200">
                       <span className="material-symbols-outlined text-slate-300" style={{ fontSize: '48px' }}>article</span>
                     </div>
                   )}
-                  <div className="absolute top-4 left-4">
-                    <span className="bg-white/90 backdrop-blur-md text-slate-700 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full border border-slate-200">
-                      {article.source.name}
-                    </span>
-                  </div>
+                  {article.author && (
+                    <div className="absolute top-4 left-4">
+                      <span className="bg-white/90 backdrop-blur-md text-slate-700 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full border border-slate-200">
+                        {article.author}
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <div className="p-6 flex flex-col flex-1 gap-3">
                   <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                    {new Date(article.publishedAt).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    {new Date(article.pubDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
                   </p>
                   <h3 className={`font-black text-slate-900 leading-tight tracking-tight group-hover:text-blue-600 transition-colors ${i === 0 ? 'text-2xl' : 'text-base'}`}>
                     {article.title}
@@ -1013,7 +996,7 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
         )}
 
         {/* Empty */}
-        {!newsLoading && !newsError && GNEWS_API_KEY && news.length === 0 && (
+        {!newsLoading && !newsError && news.length === 0 && (
           <div className="bg-white border border-slate-200 rounded-[2.5rem] p-12 text-center space-y-3">
             <span className="material-symbols-outlined block text-slate-200" style={{ fontSize: '48px' }}>newspaper</span>
             <p className="text-slate-500 font-bold text-sm">No articles found for your specialization</p>
