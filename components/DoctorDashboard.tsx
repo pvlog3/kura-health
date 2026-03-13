@@ -430,6 +430,38 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
             ))}
           </div>
         </section>
+
+        <section className="space-y-3">
+          <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 ml-1">Upcoming</h4>
+          {(() => {
+            const upcoming = appointments
+              .filter(a => new Date(a.date) >= new Date() && a.status !== 'done')
+              .slice(0, 5);
+            if (upcoming.length === 0) return (
+              <p className="text-xs text-slate-400 px-2">No upcoming appointments.</p>
+            );
+            return (
+              <div className="space-y-2">
+                {upcoming.map(a => {
+                  const d = new Date(a.date);
+                  return (
+                    <div key={a.id} className={`rounded-xl p-3 border ${a.type === 'virtual' ? 'bg-indigo-50 border-indigo-100' : 'bg-[#A2F0D3]/20 border-[#A2F0D3]/40'}`}>
+                      <p className="text-xs font-black text-slate-900 truncate">{a.patientName}</p>
+                      <p className="text-[10px] font-bold text-slate-500 mt-1">
+                        {d.toLocaleDateString('default', { weekday: 'short', month: 'short', day: 'numeric' })}
+                        {' · '}
+                        {d.toLocaleTimeString('default', { hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                      <span className={`inline-block mt-1.5 text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full ${a.type === 'virtual' ? 'bg-indigo-100 text-indigo-700' : 'bg-[#A2F0D3]/60 text-emerald-800'}`}>
+                        {a.type}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+        </section>
       </aside>
 
       <main className="flex-1 flex flex-col overflow-hidden bg-white">
@@ -465,17 +497,21 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
         </div>
 
         <div className="flex-1 overflow-y-auto relative no-scrollbar">
-          <div className="grid grid-cols-7 min-h-full">
+          <div className="flex min-h-full">
+            {/* Time gutter */}
+            <div className="w-16 flex-shrink-0 border-r border-slate-100 bg-white">
+              {timeSlots.map(time => (
+                <div key={time} className="h-20 border-b border-slate-50/50 flex items-start justify-end pr-3 pt-1">
+                  <span className="text-[10px] font-black text-slate-300">{time}</span>
+                </div>
+              ))}
+            </div>
+            {/* Day columns */}
+            <div className="flex-1 grid grid-cols-7 min-h-full">
             {weekDates.map((_, dayIdx) => (
               <div key={dayIdx} className="border-r border-slate-50 relative min-h-full last:border-r-0">
                 {timeSlots.map(time => (
-                  <div key={time} className="h-20 border-b border-slate-50/50 flex items-start px-3 py-2">
-                    {dayIdx === 0 && (
-                      <span className="absolute left-[-45px] text-[10px] font-black text-slate-300 transform -translate-y-1/2">
-                        {time}
-                      </span>
-                    )}
-                  </div>
+                  <div key={time} className="h-20 border-b border-slate-50/50" />
                 ))}
                 {appointments
                   .filter(a => new Date(a.date).toDateString() === weekDates[dayIdx].toDateString())
@@ -494,12 +530,15 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
                         }`}
                       >
                         <h5 className="text-xs font-black text-slate-900 truncate">{app.patientName}</h5>
-                        <p className="text-[9px] font-bold text-slate-500 uppercase tracking-tighter mt-1 truncate">{app.type}</p>
+                        <p className="text-[9px] font-bold text-slate-500 uppercase tracking-tighter mt-1 truncate">
+                          {date.toLocaleTimeString('default', { hour: '2-digit', minute: '2-digit' })} · {app.type}
+                        </p>
                       </div>
                     );
                   })}
               </div>
             ))}
+            </div>
           </div>
         </div>
       </main>
