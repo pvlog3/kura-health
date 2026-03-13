@@ -7,6 +7,7 @@ import {
   doc,
   onSnapshot,
   query,
+  updateDoc,
   where,
 } from 'firebase/firestore';
 import type { UserProfile, WorkingHours } from '../types';
@@ -72,6 +73,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
   const [photoFiles, setPhotoFiles] = useState<(File | null)[]>([null, null, null]);
   const [photoPreviews, setPhotoPreviews] = useState<(string | null)[]>([null, null, null]);
   const [submitting, setSubmitting] = useState(false);
+  const [editingRoom, setEditingRoom] = useState<RoomDoc | null>(null);
   const [search, setSearch] = useState('');
   const [currentView, setCurrentView] = useState<LandlordView>('create');
   const [showPublishSuccess, setShowPublishSuccess] = useState(false);
@@ -142,6 +144,27 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     });
   };
 
+  const handleEditRoom = (r: RoomDoc) => {
+    setForm({
+      name: r.name,
+      address: r.address,
+      city: r.city,
+      hourlyRate: String(r.hourlyRate),
+      notes: r.notes || '',
+      available: r.available,
+      amenities: new Set(r.amenities),
+      hoursStart: r.availability?.start || '08:00',
+      hoursEnd: r.availability?.end || '18:00',
+      days: new Set(r.availability?.days || [1, 2, 3, 4, 5]),
+    });
+    const previews: (string | null)[] = [null, null, null];
+    r.photos.forEach((p, i) => { if (i < 3) previews[i] = p; });
+    setPhotoPreviews(previews);
+    setPhotoFiles([null, null, null]);
+    setEditingRoom(r);
+    setCurrentView('create');
+  };
+
   const createRoom = async (e: React.FormEvent) => {
     e.preventDefault();
     if (submitting) return;
@@ -161,32 +184,50 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     setSubmitting(true);
     try {
       const listingName = form.name.trim();
-      // Use compressed base64 previews directly — no Firebase Storage needed
       const photos = photoPreviews.filter((p): p is string => p !== null);
-      await addDoc(collection(db, 'rooms'), {
-        ownerId: profile.uid,
-        ownerName: profile.name,
-        name: listingName,
-        address: form.address.trim(),
-        city: form.city.trim(),
-        hourlyRate: hourly,
-        photos,
-        amenities: Array.from(form.amenities),
-        notes: form.notes.trim() ? form.notes.trim() : null,
-        available: form.available,
-        createdAt: new Date().toISOString(),
-        availability,
-      });
 
-      setForm(emptyForm);
-      setPhotoFiles([null, null, null]);
-      setPhotoPreviews([null, null, null]);
-      setPublishedName(listingName);
-      setShowPublishSuccess(true);
-      setCurrentView('rooms');
+      if (editingRoom) {
+        await updateDoc(doc(db, 'rooms', editingRoom.id), {
+          name: listingName,
+          address: form.address.trim(),
+          city: form.city.trim(),
+          hourlyRate: hourly,
+          photos,
+          amenities: Array.from(form.amenities),
+          notes: form.notes.trim() ? form.notes.trim() : null,
+          available: form.available,
+          availability,
+        });
+        setEditingRoom(null);
+        setForm(emptyForm);
+        setPhotoFiles([null, null, null]);
+        setPhotoPreviews([null, null, null]);
+        setCurrentView('rooms');
+      } else {
+        await addDoc(collection(db, 'rooms'), {
+          ownerId: profile.uid,
+          ownerName: profile.name,
+          name: listingName,
+          address: form.address.trim(),
+          city: form.city.trim(),
+          hourlyRate: hourly,
+          photos,
+          amenities: Array.from(form.amenities),
+          notes: form.notes.trim() ? form.notes.trim() : null,
+          available: form.available,
+          createdAt: new Date().toISOString(),
+          availability,
+        });
+        setForm(emptyForm);
+        setPhotoFiles([null, null, null]);
+        setPhotoPreviews([null, null, null]);
+        setPublishedName(listingName);
+        setShowPublishSuccess(true);
+        setCurrentView('rooms');
+      }
     } catch (e) {
-      console.error('Create room error:', e);
-      alert('Failed to publish listing. Check Firestore rules and try again.');
+      console.error('Save room error:', e);
+      alert('Failed to save listing. Check Firestore rules and try again.');
     } finally {
       setSubmitting(false);
     }
@@ -242,7 +283,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search your listings…"
-                className="w-72 max-w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                className="w-72 max-w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
               />
             )}
           </div>
@@ -254,8 +295,8 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
       <section className="bg-white border border-slate-200 rounded-[2.5rem] p-10 shadow-sm">
         <div className="flex items-center justify-between gap-6 flex-wrap">
           <div>
-            <h2 className="text-xl font-black text-slate-900 tracking-tight">Create a new listing</h2>
-            <p className="text-slate-500 text-sm mt-1">Tell professionals what makes your space great for consultations.</p>
+            <h2 className="text-xl font-black text-slate-900 tracking-tight">{editingRoom ? 'Edit listing' : 'Create a new listing'}</h2>
+            <p className="text-slate-500 text-sm mt-1">{editingRoom ? 'Update your room details below.' : 'Tell professionals what makes your space great for consultations.'}</p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-3">
@@ -285,7 +326,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                 onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
                 placeholder="e.g. Bright private room near downtown"
                 required
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
               />
             </div>
 
@@ -297,7 +338,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                   onChange={(e) => setForm((p) => ({ ...p, city: e.target.value }))}
                   placeholder="City"
                   required
-                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
                 />
               </div>
               <div>
@@ -308,7 +349,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                   inputMode="numeric"
                   placeholder="e.g. 35"
                   required
-                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
                 />
               </div>
             </div>
@@ -320,7 +361,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                 onChange={(e) => setForm((p) => ({ ...p, address: e.target.value }))}
                 placeholder="Street address"
                 required
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
               />
             </div>
 
@@ -361,14 +402,14 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                     type="time"
                     value={form.hoursStart}
                     onChange={(e) => setForm((p) => ({ ...p, hoursStart: e.target.value }))}
-                    className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                    className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
                   />
                   <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-widest">To</span>
                   <input
                     type="time"
                     value={form.hoursEnd}
                     onChange={(e) => setForm((p) => ({ ...p, hoursEnd: e.target.value }))}
-                    className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                    className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
                   />
                 </div>
               </div>
@@ -380,7 +421,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                 value={form.notes}
                 onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))}
                 placeholder="Parking instructions, check-in process, equipment available, etc."
-                className="w-full h-28 bg-slate-50 border border-slate-200 rounded-[1.5rem] px-5 py-4 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                className="w-full h-28 bg-slate-50 border border-slate-200 rounded-[1.5rem] px-5 py-4 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
               />
             </div>
           </div>
@@ -441,17 +482,17 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
             <div className="flex gap-4">
               <button
                 type="button"
-                onClick={() => { setForm(emptyForm); setPhotoFiles([null, null, null]); setPhotoPreviews([null, null, null]); }}
+                onClick={() => { setForm(emptyForm); setPhotoFiles([null, null, null]); setPhotoPreviews([null, null, null]); setEditingRoom(null); }}
                 className="flex-1 py-4 rounded-2xl border border-slate-200 text-slate-600 font-black uppercase text-[10px] tracking-widest hover:bg-slate-50 transition-colors"
               >
-                Reset
+                {editingRoom ? 'Cancel' : 'Reset'}
               </button>
               <button
                 type="submit"
                 disabled={submitting}
                 className="flex-1 py-4 rounded-2xl bg-slate-900 text-white font-black uppercase text-[10px] tracking-widest hover:bg-black transition-colors shadow-xl disabled:opacity-50"
               >
-                {submitting ? 'Publishing…' : 'Publish listing'}
+                {submitting ? 'Saving…' : editingRoom ? 'Update listing' : 'Publish listing'}
               </button>
             </div>
           </div>
@@ -536,14 +577,12 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                     >
                       Delete
                     </button>
-                    <a
-                      href="#"
-                      onClick={(e) => e.preventDefault()}
-                      className="flex-1 py-4 rounded-2xl bg-slate-100 text-slate-700 font-black uppercase text-[10px] tracking-widest text-center"
-                      title="Edit can be added next"
+                    <button
+                      onClick={() => handleEditRoom(r)}
+                      className="flex-1 py-4 rounded-2xl bg-slate-900 text-white font-black uppercase text-[10px] tracking-widest hover:bg-black transition-colors shadow-lg"
                     >
-                      Edit (next)
-                    </a>
+                      Edit
+                    </button>
                   </div>
                 </div>
               </div>
