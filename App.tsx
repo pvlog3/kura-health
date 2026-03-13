@@ -28,11 +28,13 @@ const App: React.FC = () => {
     );
   }
 
+  if (profile.role === 'doctor') {
+    return <DoctorDashboard profile={profile} />;
+  }
+
   return (
     <Layout profile={profile}>
-      {profile.role === 'doctor' ? (
-        <DoctorDashboard profile={profile} />
-      ) : profile.role === 'landlord' ? (
+      {profile.role === 'landlord' ? (
         <LandlordDashboard profile={profile} />
       ) : (
         <ClientBooking profile={profile} />

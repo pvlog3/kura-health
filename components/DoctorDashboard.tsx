@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
-import { db } from '../firebase';
+import { db, auth } from '../firebase';
+import { signOut } from 'firebase/auth';
 import { 
   collection, 
   query, 
@@ -309,7 +310,7 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
   };
 
   const renderSchedule = () => (
-    <div className="flex bg-white h-[calc(100vh-140px)] -mx-4 -mt-8 rounded-b-[2rem] overflow-hidden animate-in fade-in duration-500">
+    <div className="flex bg-white h-[calc(100vh-64px)] -mx-8 -mt-8 overflow-hidden animate-in fade-in duration-500">
       <aside className="w-80 border-r border-slate-100 flex flex-col bg-slate-50/50 p-6 space-y-8 overflow-y-auto no-scrollbar">
         <section>
           <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
@@ -491,7 +492,7 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
   };
 
   const renderRooms = () => (
-    <div className="space-y-8 pb-24 animate-in fade-in duration-500">
+    <div className="space-y-8 animate-in fade-in duration-500">
       <header className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
           <p className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-500">Practice</p>
@@ -661,7 +662,7 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
   );
 
   const renderProfile = () => (
-    <div className="max-w-4xl mx-auto space-y-8 animate-in slide-in-from-bottom-4 duration-500 pb-24 text-slate-900">
+    <div className="max-w-4xl mx-auto space-y-8 animate-in slide-in-from-bottom-4 duration-500 text-slate-900">
       <div className="bg-white rounded-[3.5rem] shadow-sm border border-slate-200 overflow-hidden group/card relative">
         <div className="h-72 relative bg-slate-900">
           <div className="absolute inset-0 overflow-hidden">
@@ -1009,7 +1010,7 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
     return (
-      <div className="flex gap-5 text-slate-900 animate-in fade-in duration-500 pb-28">
+      <div className="flex gap-5 text-slate-900 animate-in fade-in duration-500">
 
         {/* ── MAIN CONTENT ── */}
         <div className="flex-1 min-w-0 space-y-5">
@@ -1340,53 +1341,111 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
     );
   };
 
+  const navItems: { view: DoctorView; label: string; icon: string }[] = [
+    { view: 'overview',  label: 'Dashboard',    icon: 'grid_view'      },
+    { view: 'schedule',  label: 'Appointments', icon: 'calendar_month' },
+    { view: 'rooms',     label: 'Rooms',        icon: 'meeting_room'   },
+    { view: 'profile',   label: 'Profile',      icon: 'person'         },
+  ];
+
+  const viewTitle: Record<DoctorView, string> = {
+    overview: 'Dashboard',
+    schedule: 'Appointments',
+    rooms:    'Rooms',
+    profile:  'Profile',
+  };
+
   return (
-    <div className="space-y-8 min-h-screen">
+    <div className="flex min-h-screen bg-slate-50">
+
+      {/* ── Visit wrap-up modal ── */}
       {commentingId && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 z-[100] animate-in fade-in duration-200">
           <div className="bg-white rounded-[3rem] p-10 max-w-md w-full shadow-2xl animate-in zoom-in-95 duration-300">
-             <h3 className="text-2xl font-black text-slate-900 mb-2 uppercase tracking-tighter">Visit Wrap-Up</h3>
-             <textarea value={tempComment} onChange={(e) => setTempComment(e.target.value)} placeholder="Visit notes..." className="w-full h-40 bg-slate-50 border border-slate-200 rounded-[1.5rem] p-6 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all mb-8 text-slate-900" />
-             <div className="flex space-x-4">
-                <button onClick={() => setCommentingId(null)} className="flex-1 py-4 text-slate-400 font-black uppercase text-[10px] tracking-widest hover:bg-slate-100 rounded-2xl">Discard</button>
-                <button onClick={submitCompletion} className="flex-1 py-4 bg-slate-900 text-white font-black uppercase text-[10px] tracking-widest rounded-2xl hover:bg-black shadow-xl">Finalize</button>
-             </div>
+            <h3 className="text-2xl font-black text-slate-900 mb-2 uppercase tracking-tighter">Visit Wrap-Up</h3>
+            <textarea value={tempComment} onChange={(e) => setTempComment(e.target.value)} placeholder="Visit notes..." className="w-full h-40 bg-slate-50 border border-slate-200 rounded-[1.5rem] p-6 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all mb-8 text-slate-900" />
+            <div className="flex space-x-4">
+              <button onClick={() => setCommentingId(null)} className="flex-1 py-4 text-slate-400 font-black uppercase text-[10px] tracking-widest hover:bg-slate-100 rounded-2xl">Discard</button>
+              <button onClick={submitCompletion} className="flex-1 py-4 bg-slate-900 text-white font-black uppercase text-[10px] tracking-widest rounded-2xl hover:bg-black shadow-xl">Finalize</button>
+            </div>
           </div>
         </div>
       )}
 
       {renderPatientPanel()}
 
-      {currentView === 'overview'
-        ? renderOverview()
-        : currentView === 'schedule'
-          ? renderSchedule()
-          : currentView === 'rooms'
-            ? renderRooms()
-            : renderProfile()}
+      {/* ── LEFT SIDEBAR ── */}
+      <aside className="w-60 shrink-0 bg-[#0a1628] flex flex-col fixed inset-y-0 left-0 z-50">
 
-      <nav className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-white/80 backdrop-blur-2xl border border-slate-200 h-20 rounded-[2.5rem] flex items-center px-4 z-50 shadow-2xl min-w-[420px]">
-        <div className="flex w-full justify-around items-center">
-          <button onClick={() => { setCurrentView('overview'); setSelectedPatient(null); setNoteInput(''); }} className={`flex flex-col items-center px-6 py-2 rounded-2xl transition-all ${currentView === 'overview' ? 'text-blue-600 scale-110' : 'text-slate-300'}`}>
-            <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
-            <span className="text-[10px] mt-1 font-black uppercase tracking-tighter">Summary</span>
-          </button>
-          <button onClick={() => { setCurrentView('schedule'); setSelectedPatient(null); setNoteInput(''); }} className={`flex flex-col items-center px-6 py-2 rounded-2xl transition-all ${currentView === 'schedule' ? 'text-blue-600 scale-110' : 'text-slate-300'}`}>
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-            <span className="text-[10px] mt-1 font-black uppercase tracking-tighter">Schedule</span>
-          </button>
-          <button onClick={() => { setCurrentView('rooms'); setSelectedPatient(null); setNoteInput(''); }} className={`flex flex-col items-center px-6 py-2 rounded-2xl transition-all ${currentView === 'rooms' ? 'text-blue-600 scale-110' : 'text-slate-300'}`}>
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2.5">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 21V5a2 2 0 012-2h7a2 2 0 012 2v16M7 21v-4a2 2 0 012-2h3M14 7h5a2 2 0 012 2v12M17 21v-4" />
-            </svg>
-            <span className="text-[10px] mt-1 font-black uppercase tracking-tighter">Rooms</span>
-          </button>
-          <button onClick={() => { setCurrentView('profile'); setIsEditingProfile(false); setSelectedPatient(null); setNoteInput(''); }} className={`flex flex-col items-center px-6 py-2 rounded-2xl transition-all ${currentView === 'profile' ? 'text-blue-600 scale-110' : 'text-slate-300'}`}>
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
-            <span className="text-[10px] mt-1 font-black uppercase tracking-tighter">Portfolio</span>
-          </button>
+        {/* Logo */}
+        <div className="px-6 py-5 border-b border-white/10">
+          <div className="flex items-center gap-3">
+            <img src="/kura-logo.png" alt="Kura" className="w-9 h-9 rounded-[10px] shadow-lg" />
+            <span className="text-white font-black text-xl tracking-tighter">Kura</span>
+          </div>
         </div>
-      </nav>
+
+        {/* Navigation */}
+        <nav className="flex-1 px-3 py-6 space-y-1">
+          {navItems.map(item => (
+            <button
+              key={item.view}
+              onClick={() => { setCurrentView(item.view); setSelectedPatient(null); setNoteInput(''); if (item.view === 'profile') setIsEditingProfile(false); }}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all text-sm font-bold text-left ${
+                currentView === item.view
+                  ? 'bg-white/15 text-white'
+                  : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+              }`}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>{item.icon}</span>
+              {item.label}
+            </button>
+          ))}
+        </nav>
+
+        {/* User card + logout */}
+        <div className="px-3 pb-6">
+          <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-white/5">
+            <div className="w-9 h-9 rounded-full bg-[#A2F0D3] flex items-center justify-center text-slate-900 font-black text-sm shrink-0">
+              {profile.name?.[0]?.toUpperCase() ?? '?'}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-white text-xs font-bold truncate">{profile.name}</p>
+              <p className="text-slate-400 text-[10px] capitalize truncate">{profile.specialty || profile.category || 'Doctor'}</p>
+            </div>
+            <button
+              onClick={() => signOut(auth)}
+              className="text-slate-400 hover:text-white transition shrink-0"
+              title="Sign out"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>logout</span>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* ── MAIN AREA ── */}
+      <div className="ml-60 flex-1 flex flex-col min-h-screen">
+
+        {/* Top bar */}
+        <header className="bg-white border-b border-slate-100 px-8 h-16 flex items-center justify-between sticky top-0 z-40 shrink-0">
+          <h2 className="text-slate-900 font-black text-lg tracking-tighter">{viewTitle[currentView]}</h2>
+          <span className="text-slate-400 text-xs font-medium hidden sm:block">
+            {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+          </span>
+        </header>
+
+        {/* Page content */}
+        <main className="flex-1 p-8">
+          {currentView === 'overview'
+            ? renderOverview()
+            : currentView === 'schedule'
+              ? renderSchedule()
+              : currentView === 'rooms'
+                ? renderRooms()
+                : renderProfile()}
+        </main>
+      </div>
     </div>
   );
 };
