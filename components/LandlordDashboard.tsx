@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { db, storage } from '../firebase';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db } from '../firebase';
 import {
   addDoc,
   collection,
@@ -8,7 +7,6 @@ import {
   doc,
   onSnapshot,
   query,
-  updateDoc,
   where,
 } from 'firebase/firestore';
 import type { UserProfile, WorkingHours } from '../types';
@@ -118,9 +116,21 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
   const handlePhotoFile = (e: React.ChangeEvent<HTMLInputElement>, index: number) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const preview = URL.createObjectURL(file);
-    setPhotoFiles(prev => { const next = [...prev]; next[index] = file; return next; });
-    setPhotoPreviews(prev => { const next = [...prev]; next[index] = preview; return next; });
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      const MAX = 800;
+      const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const base64 = canvas.toDataURL('image/jpeg', 0.75);
+      setPhotoFiles(prev => { const next = [...prev]; next[index] = file; return next; });
+      setPhotoPreviews(prev => { const next = [...prev]; next[index] = base64; return next; });
+    };
+    img.src = objectUrl;
   };
 
   const toggleAmenity = (id: Amenity) => {
@@ -151,35 +161,22 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     setSubmitting(true);
     try {
       const listingName = form.name.trim();
-      // Create the room doc first to get its ID
-      const roomRef = await addDoc(collection(db, 'rooms'), {
+      // Use compressed base64 previews directly — no Firebase Storage needed
+      const photos = photoPreviews.filter((p): p is string => p !== null);
+      await addDoc(collection(db, 'rooms'), {
         ownerId: profile.uid,
         ownerName: profile.name,
         name: listingName,
         address: form.address.trim(),
         city: form.city.trim(),
         hourlyRate: hourly,
-        photos: [],
+        photos,
         amenities: Array.from(form.amenities),
         notes: form.notes.trim() ? form.notes.trim() : null,
         available: form.available,
         createdAt: new Date().toISOString(),
         availability,
       });
-
-      // Upload any selected photos to Firebase Storage
-      const uploadedUrls: string[] = [];
-      for (let i = 0; i < photoFiles.length; i++) {
-        const file = photoFiles[i];
-        if (!file) continue;
-        const storageRef = ref(storage, `rooms/${roomRef.id}/photo${i + 1}`);
-        await uploadBytes(storageRef, file);
-        const url = await getDownloadURL(storageRef);
-        uploadedUrls.push(url);
-      }
-      if (uploadedUrls.length > 0) {
-        await updateDoc(doc(db, 'rooms', roomRef.id), { photos: uploadedUrls });
-      }
 
       setForm(emptyForm);
       setPhotoFiles([null, null, null]);
@@ -189,7 +186,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
       setCurrentView('rooms');
     } catch (e) {
       console.error('Create room error:', e);
-      alert('Failed to publish listing. Check Firestore/Storage rules and try again.');
+      alert('Failed to publish listing. Check Firestore rules and try again.');
     } finally {
       setSubmitting(false);
     }
