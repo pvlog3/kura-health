@@ -19,15 +19,21 @@ interface DoctorDashboardProps {
 
 type DoctorView = 'overview' | 'profile' | 'schedule' | 'rooms' | 'news';
 
-// ── News via rss2json.com + ScienceDaily RSS (no API key needed) ──────────
+// ── The Guardian Open Platform API (CORS-friendly, free) ─────────────────
+// 'test' key works immediately (12 req/day). Get your own free key at:
+// https://open-platform.theguardian.com/access/
+const GUARDIAN_API_KEY = 'test';
+
 interface NewsArticle {
-  title: string;
-  description: string;
-  link: string;
-  thumbnail: string;
-  pubDate: string;
-  author: string;
-  categories: string[];
+  id: string;
+  webTitle: string;
+  webUrl: string;
+  webPublicationDate: string;
+  fields?: {
+    thumbnail?: string;
+    trailText?: string;
+    byline?: string;
+  };
 }
 
 type RoomAmenity =
@@ -197,29 +203,29 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
   }, [currentView]);
 
   // News fetch
-  const getNewsFeed = (): { url: string; label: string } => {
+  const getGuardianQuery = (): { q: string; section: string; label: string } => {
     const raw = `${profile.specialty || ''} ${profile.category || ''}`.toLowerCase();
     if (raw.includes('cardio'))
-      return { url: 'https://www.sciencedaily.com/rss/health_medicine/cardiovascular_disease.xml', label: 'Cardiology' };
+      return { q: 'cardiology heart disease', section: 'science', label: 'Cardiology' };
     if (raw.includes('psych') || raw.includes('mental'))
-      return { url: 'https://www.sciencedaily.com/rss/health_medicine/psychology.xml', label: 'Psychology' };
+      return { q: 'mental health psychiatry', section: 'society', label: 'Psychology' };
     if (raw.includes('neurol') || raw.includes('brain'))
-      return { url: 'https://www.sciencedaily.com/rss/health_medicine/neuroscience.xml', label: 'Neurology' };
+      return { q: 'neurology brain neuroscience', section: 'science', label: 'Neurology' };
     if (raw.includes('pediatr') || raw.includes('paediatr') || raw.includes('child'))
-      return { url: 'https://www.sciencedaily.com/rss/health_medicine/children_s_health.xml', label: 'Pediatrics' };
+      return { q: 'children health pediatrics', section: 'society', label: 'Pediatrics' };
     if (raw.includes('oncol') || raw.includes('cancer'))
-      return { url: 'https://www.sciencedaily.com/rss/health_medicine/cancer.xml', label: 'Oncology' };
+      return { q: 'cancer oncology treatment', section: 'science', label: 'Oncology' };
     if (raw.includes('ortho'))
-      return { url: 'https://www.sciencedaily.com/rss/health_medicine/sports_medicine.xml', label: 'Orthopedics' };
+      return { q: 'orthopedics sports medicine', section: 'sport', label: 'Orthopedics' };
     if (raw.includes('dermat') || raw.includes('skin'))
-      return { url: 'https://www.sciencedaily.com/rss/health_medicine/skin_care.xml', label: 'Dermatology' };
+      return { q: 'dermatology skin health', section: 'science', label: 'Dermatology' };
     if (raw.includes('diabet') || raw.includes('endocrin'))
-      return { url: 'https://www.sciencedaily.com/rss/health_medicine/diabetes.xml', label: 'Endocrinology' };
+      return { q: 'diabetes endocrinology', section: 'science', label: 'Endocrinology' };
     if (raw.includes('infect') || raw.includes('immun'))
-      return { url: 'https://www.sciencedaily.com/rss/health_medicine/infectious_diseases.xml', label: 'Infectious Disease' };
+      return { q: 'infectious disease immunology', section: 'science', label: 'Infectious Disease' };
     if (raw.includes('gastro') || raw.includes('digest'))
-      return { url: 'https://www.sciencedaily.com/rss/health_medicine/gastrointestinal_disease.xml', label: 'Gastroenterology' };
-    return { url: 'https://www.sciencedaily.com/rss/health_medicine.xml', label: 'Medicine' };
+      return { q: 'gastroenterology digestive health', section: 'science', label: 'Gastroenterology' };
+    return { q: 'medicine health medical research', section: 'science', label: 'Medicine' };
   };
 
   useEffect(() => {
@@ -227,12 +233,13 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
 
     setNewsLoading(true);
     setNewsError(null);
-    const { url } = getNewsFeed();
-    fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}&count=12`)
+    const { q, section } = getGuardianQuery();
+    const apiUrl = `https://content.guardianapis.com/search?q=${encodeURIComponent(q)}&section=${section}&show-fields=thumbnail,trailText,byline&order-by=newest&page-size=12&api-key=${GUARDIAN_API_KEY}`;
+    fetch(apiUrl)
       .then(r => r.json())
       .then(data => {
-        if (data.status !== 'ok') throw new Error('Feed unavailable');
-        setNews(data.items || []);
+        if (data.response?.status !== 'ok') throw new Error('API error');
+        setNews(data.response.results || []);
       })
       .catch(() => setNewsError('Failed to load news. Please try again.'))
       .finally(() => setNewsLoading(false));
@@ -898,7 +905,7 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
   );
 
   const renderNews = () => {
-    const { label: topicLabel } = getNewsFeed();
+    const { label: topicLabel } = getGuardianQuery();
 
     return (
       <div className="space-y-8 animate-in fade-in duration-500">
@@ -954,36 +961,36 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
             {news.map((article, i) => (
               <a
                 key={i}
-                href={article.link}
+                href={article.webUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className={`bg-white rounded-[2.5rem] border border-slate-200 shadow-sm overflow-hidden group hover:shadow-lg hover:-translate-y-1 transition-all duration-300 flex flex-col ${i === 0 ? 'md:col-span-2' : ''}`}
               >
                 <div className={`${i === 0 ? 'h-64' : 'h-44'} bg-slate-100 relative overflow-hidden`}>
-                  {article.thumbnail ? (
-                    <img src={article.thumbnail} alt="" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                  {article.fields?.thumbnail ? (
+                    <img src={article.fields.thumbnail} alt="" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200">
                       <span className="material-symbols-outlined text-slate-300" style={{ fontSize: '48px' }}>article</span>
                     </div>
                   )}
-                  {article.author && (
+                  {article.fields?.byline && (
                     <div className="absolute top-4 left-4">
                       <span className="bg-white/90 backdrop-blur-md text-slate-700 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full border border-slate-200">
-                        {article.author}
+                        {article.fields.byline}
                       </span>
                     </div>
                   )}
                 </div>
                 <div className="p-6 flex flex-col flex-1 gap-3">
                   <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                    {new Date(article.pubDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    {new Date(article.webPublicationDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
                   </p>
                   <h3 className={`font-black text-slate-900 leading-tight tracking-tight group-hover:text-blue-600 transition-colors ${i === 0 ? 'text-2xl' : 'text-base'}`}>
-                    {article.title}
+                    {article.webTitle}
                   </h3>
-                  {article.description && (
-                    <p className="text-slate-500 text-sm leading-relaxed line-clamp-2 flex-1">{article.description}</p>
+                  {article.fields?.trailText && (
+                    <p className="text-slate-500 text-sm leading-relaxed line-clamp-2 flex-1">{article.fields.trailText}</p>
                   )}
                   <div className="flex items-center gap-2 pt-2 text-blue-600 text-[10px] font-black uppercase tracking-widest">
                     Read article
