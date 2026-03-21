@@ -60,6 +60,14 @@ function parseTeeth(raw: Record<string, ToothCondition>): Record<number, ToothCo
   return Object.entries(raw).reduce((acc, [k, v]) => ({ ...acc, [Number(k)]: v }), {} as Record<number, ToothCondition>);
 }
 
+function getToothType(n: number): 'incisor' | 'canine' | 'premolar' | 'molar' {
+  const last = n % 10;
+  if (last === 1 || last === 2) return 'incisor';
+  if (last === 3) return 'canine';
+  if (last === 4 || last === 5) return 'premolar';
+  return 'molar';
+}
+
 const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
   // Core data
   const [appointments, setAppointments] = useState<Appointment[]>([]);
@@ -71,11 +79,17 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
   // Navigation
   const [currentView, setCurrentView] = useState<DentistView>('overview');
 
+  // Patient info popup
+  const [infoPatient, setInfoPatient] = useState<{
+    patientId: string; patientName: string; visitDate?: string; appointmentId?: string;
+  } | null>(null);
+
   // Patient panel
   const [selectedPatient, setSelectedPatient] = useState<{
     patientId: string; patientName: string; visitDate?: string;
   } | null>(null);
   const [patientPanelTab, setPatientPanelTab] = useState<'chart' | 'plan' | 'notes'>('chart');
+  const [notesSubTab, setNotesSubTab] = useState<'new' | 'history'>('new');
 
   // Tooth chart editing
   const [editingChart, setEditingChart] = useState<Record<number, ToothCondition>>({});
@@ -118,9 +132,8 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
   const profileInputRef = useRef<HTMLInputElement>(null);
   const backgroundInputRef = useRef<HTMLInputElement>(null);
 
-  // Always-current refs to avoid stale closures in the seeding useEffect
-  const toothChartsRef = useRef<ToothChart[]>([]);
-  const treatmentPlansRef = useRef<TreatmentPlan[]>([]);
+  // Tracks previous patient ID to distinguish patient-change from Firestore-data-update
+  const prevPatientIdRef = useRef<string | null>(null);
 
   // Save success feedback
   const [saveSuccess, setSaveSuccess] = useState<'chart' | 'plan' | 'note' | null>(null);
@@ -155,27 +168,37 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
     return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
   }, [profile.uid]);
 
-  // Keep refs in sync so the seeding effect always sees the latest Firestore data
-  useEffect(() => { toothChartsRef.current = toothCharts; }, [toothCharts]);
-  useEffect(() => { treatmentPlansRef.current = treatmentPlans; }, [treatmentPlans]);
-
-  // ── Seed patient panel state when patient selected ───────────────────────
-  // Reads from refs (not state) so the effect always sees the latest data,
-  // even if toothCharts/treatmentPlans updated after the effect was scheduled.
+  // ── Seed patient panel state when patient selected or Firestore data updates ──
+  // Including toothCharts/treatmentPlans in deps means the chart always reflects
+  // the latest saved Firestore state (fixes marks not persisting after save+reopen).
+  // prevPatientIdRef distinguishes "new patient opened" from "data refreshed for same patient".
   useEffect(() => {
-    if (!selectedPatient) return;
-    setPatientPanelTab('chart');
-    setSelectedTooth(null);
-    setSaveSuccess(null);
-    const chart = toothChartsRef.current.find(c => c.patientId === selectedPatient.patientId);
+    if (!selectedPatient) {
+      prevPatientIdRef.current = null;
+      return;
+    }
+
+    const patientChanged = prevPatientIdRef.current !== selectedPatient.patientId;
+    prevPatientIdRef.current = selectedPatient.patientId;
+
+    if (patientChanged) {
+      setPatientPanelTab('chart');
+      setNotesSubTab('new');
+      setSelectedTooth(null);
+      setSaveSuccess(null);
+      setNoteForm({
+        visitDate: selectedPatient.visitDate?.slice(0, 10) ?? new Date().toISOString().slice(0, 10),
+        chiefComplaint: '', diagnosis: '', treatment: '', materials: '', nextVisit: '',
+      });
+    }
+
+    // Always load latest chart + plan from current Firestore state
+    const chart = toothCharts.find(c => c.patientId === selectedPatient.patientId);
     setEditingChart(chart ? parseTeeth(chart.teeth as unknown as Record<string, ToothCondition>) : {});
-    const plan = treatmentPlansRef.current.find(p => p.patientId === selectedPatient.patientId && p.status === 'active');
+
+    const plan = treatmentPlans.find(p => p.patientId === selectedPatient.patientId && p.status === 'active');
     setEditingPlan(plan?.procedures ?? []);
-    setNoteForm({
-      visitDate: selectedPatient.visitDate?.slice(0, 10) ?? new Date().toISOString().slice(0, 10),
-      chiefComplaint: '', diagnosis: '', treatment: '', materials: '', nextVisit: '',
-    });
-  }, [selectedPatient]);
+  }, [selectedPatient, toothCharts, treatmentPlans]);
 
   // ── Calendar helpers ─────────────────────────────────────────────────────
   const weekDates = useMemo(() => {
@@ -268,12 +291,14 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
     }
   };
 
-  const handleSaveDentalNote = async () => {
+  const handleSaveVisitNote = async () => {
     if (!selectedPatient || savingNote) return;
-    if (!noteForm.chiefComplaint.trim() || !noteForm.diagnosis.trim() || !noteForm.treatment.trim()) return;
+    if (!noteForm.chiefComplaint.trim() && !noteForm.diagnosis.trim() && !noteForm.treatment.trim()) return;
     setSavingNote(true);
     try {
-      await addDoc(collection(db, 'dental_notes'), {
+      const now = new Date().toISOString();
+
+      const noteSave = addDoc(collection(db, 'dental_notes'), {
         doctorId: profile.uid,
         patientId: selectedPatient.patientId,
         patientName: selectedPatient.patientName,
@@ -284,13 +309,30 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
         materials: noteForm.materials.trim() || '',
         toothNumbers: [],
         nextVisit: noteForm.nextVisit.trim() || '',
-        createdAt: new Date().toISOString(),
+        createdAt: now,
       });
+
+      let chartSave: Promise<unknown> = Promise.resolve();
+      if (Object.keys(editingChart).length > 0) {
+        const chartData = {
+          doctorId: profile.uid,
+          patientId: selectedPatient.patientId,
+          patientName: selectedPatient.patientName,
+          teeth: editingChart,
+          updatedAt: now,
+        };
+        const existing = toothCharts.find(c => c.patientId === selectedPatient.patientId);
+        chartSave = existing
+          ? updateDoc(doc(db, 'tooth_charts', existing.id), chartData)
+          : addDoc(collection(db, 'tooth_charts'), chartData);
+      }
+
+      await Promise.all([noteSave, chartSave]);
       setNoteForm({ visitDate: new Date().toISOString().slice(0, 10), chiefComplaint: '', diagnosis: '', treatment: '', materials: '', nextVisit: '' });
       setSaveSuccess('note');
       setTimeout(() => setSaveSuccess(null), 2500);
     } catch {
-      alert('Failed to save note.');
+      alert('Failed to save visit note.');
     } finally {
       setSavingNote(false);
     }
@@ -381,25 +423,45 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
     return Array.from(map.values()).sort((a, b) => new Date(b.lastVisit).getTime() - new Date(a.lastVisit).getTime());
   }, [appointments, treatmentPlans, dentalNotes, toothCharts]);
 
-  // ── Tooth button render ──────────────────────────────────────────────────
+  // ── Tooth render (SVG anatomical shapes) ────────────────────────────────
   const renderTooth = (toothNum: number) => {
     const condition = editingChart[toothNum];
     const isSelected = selectedTooth === toothNum;
-    const color = condition ? TOOTH_STATUS_CONFIG[condition.status].color : '#e2e8f0';
     const isMissing = condition?.status === 'missing';
+    const type = getToothType(toothNum);
+    const fill = isMissing ? 'none' : (condition ? TOOTH_STATUS_CONFIG[condition.status].color : '#f1f5f9');
+    const stroke = isSelected ? '#0f172a' : (isMissing ? '#cbd5e1' : '#cbd5e1');
+    const strokeDasharray = isMissing ? '3 2' : undefined;
+
+    const shapes: Record<string, { w: number; h: number; path: string }> = {
+      molar:    { w: 36, h: 32, path: 'M5,3 Q18,0 31,3 Q35,13 31,27 Q18,32 5,27 Q1,13 5,3 Z' },
+      premolar: { w: 28, h: 30, path: 'M4,3 Q14,0 24,3 Q28,13 24,27 Q14,30 4,27 Q0,13 4,3 Z' },
+      canine:   { w: 22, h: 32, path: 'M11,1 Q21,7 19,20 Q14,31 11,32 Q8,31 3,20 Q1,7 11,1 Z' },
+      incisor:  { w: 20, h: 30, path: 'M3,2 Q10,0 17,2 L18,24 Q10,28 2,24 Z' },
+    };
+    const { w, h, path } = shapes[type];
+
     return (
-      <button
-        key={toothNum}
-        title={`Tooth ${toothNum}${condition ? `: ${TOOTH_STATUS_CONFIG[condition.status].label}` : ''}`}
-        onClick={() => { setSelectedTooth(toothNum); setToothStatusDraft(condition?.status ?? 'healthy'); setToothNoteDraft(condition?.note ?? ''); }}
-        className={`relative w-8 h-8 rounded-lg flex items-center justify-center transition-all ${isSelected ? 'ring-2 ring-slate-900 ring-offset-1 scale-110 z-10' : 'hover:scale-105'} ${isMissing ? 'opacity-50' : ''}`}
-        style={{ background: color }}
-      >
-        {isMissing
-          ? <span className="text-white text-[10px] font-black">✕</span>
-          : <span className="text-[9px] font-black" style={{ color: condition ? '#fff' : '#94a3b8' }}>{toothNum}</span>
-        }
-      </button>
+      <div key={toothNum} className="flex flex-col items-center gap-0.5">
+        <button
+          title={`Tooth ${toothNum}${condition ? `: ${TOOTH_STATUS_CONFIG[condition.status].label}` : ''}`}
+          onClick={() => { setSelectedTooth(toothNum); setToothStatusDraft(condition?.status ?? 'healthy'); setToothNoteDraft(condition?.note ?? ''); }}
+          className={`transition-all ${isSelected ? 'scale-110 drop-shadow-lg' : 'hover:scale-105'}`}
+        >
+          <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} fill="none">
+            <path
+              d={path}
+              fill={fill}
+              stroke={stroke}
+              strokeWidth={isSelected ? 2 : 1.5}
+              strokeDasharray={strokeDasharray}
+            />
+          </svg>
+        </button>
+        <span className={`text-[8px] font-black tabular-nums leading-none ${isSelected ? 'text-slate-900' : 'text-slate-400'}`}>
+          {toothNum}
+        </span>
+      </div>
     );
   };
 
@@ -453,7 +515,7 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
               <div className="divide-y divide-slate-50">
                 {todayApps.map(app => (
                   <div key={app.id} className="px-5 py-4 flex items-center gap-4 hover:bg-slate-50/50 transition cursor-pointer"
-                    onClick={() => setSelectedPatient({ patientId: app.patientId, patientName: app.patientName, visitDate: app.date })}>
+                    onClick={() => setInfoPatient({ patientId: app.patientId, patientName: app.patientName, visitDate: app.date, appointmentId: app.id })}>
                     <div className="w-10 h-10 rounded-full bg-slate-100 overflow-hidden shrink-0">
                       <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${app.patientName}`} alt="" className="w-full h-full" />
                     </div>
@@ -494,7 +556,8 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
               ) : (
                 <div className="divide-y divide-slate-50">
                   {upcoming.map(a => (
-                    <div key={a.id} className="px-5 py-3">
+                    <div key={a.id} className="px-5 py-3 hover:bg-slate-50 cursor-pointer transition"
+                      onClick={() => setInfoPatient({ patientId: a.patientId, patientName: a.patientName, visitDate: a.date, appointmentId: a.id })}>
                       <p className="font-bold text-slate-900 text-xs truncate">{a.patientName}</p>
                       <p className="text-[10px] text-slate-400 mt-0.5">
                         {new Date(a.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
@@ -556,7 +619,7 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
             {filtered.map(p => (
               <button
                 key={p.patientId}
-                onClick={() => setSelectedPatient({ patientId: p.patientId, patientName: p.patientName })}
+                onClick={() => setInfoPatient({ patientId: p.patientId, patientName: p.patientName })}
                 className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 text-left hover:shadow-md hover:-translate-y-0.5 transition-all"
               >
                 <div className="flex items-center gap-3 mb-4">
@@ -731,13 +794,7 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
                           className={`absolute left-2 right-2 rounded-xl p-2 shadow-sm border border-white/20 cursor-pointer hover:scale-[1.02] hover:shadow-lg transition-all z-10 ${
                             app.type === 'virtual' ? 'bg-indigo-50 border-indigo-100' : 'bg-[#A2F0D3]/30 border-[#A2F0D3]/50'
                           }`}
-                          onClick={() => {
-                            if (app.status === 'pending') {
-                              setWrapUpId(app.id); setWrapUpComment(''); setWrapUpDiagnosis(''); setWrapUpTreatment('');
-                            } else {
-                              setSelectedPatient({ patientId: app.patientId, patientName: app.patientName, visitDate: app.date });
-                            }
-                          }}
+                          onClick={() => setInfoPatient({ patientId: app.patientId, patientName: app.patientName, visitDate: app.date, appointmentId: app.id })}
                         >
                           <h5 className="text-[10px] font-black text-slate-900 truncate">{app.patientName}</h5>
                           <p className="text-[9px] font-bold text-slate-500 uppercase tracking-tighter mt-0.5 truncate">
@@ -884,6 +941,148 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
     </div>
   );
 
+  // ── Patient Info Popup ───────────────────────────────────────────────────
+  const renderPatientInfoPopup = () => {
+    if (!infoPatient) return null;
+    const now = new Date();
+    const patientAppts = appointments.filter(a => a.patientId === infoPatient.patientId);
+    const lastVisit = patientAppts
+      .filter(a => a.status === 'done')
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+    const nextAppt = patientAppts
+      .filter(a => a.status === 'pending' && new Date(a.date) > now)
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())[0];
+    const todayAppt = infoPatient.appointmentId
+      ? appointments.find(a => a.id === infoPatient.appointmentId)
+      : undefined;
+    const chart = toothCharts.find(c => c.patientId === infoPatient.patientId);
+    const markedTeeth = chart
+      ? Object.values(chart.teeth as unknown as Record<string, ToothCondition>).filter(t => t.status !== 'healthy').length
+      : 0;
+    const activePlan = treatmentPlans.find(p => p.patientId === infoPatient.patientId && p.status === 'active');
+    const pendingProcs = activePlan?.procedures.filter(p => p.status !== 'completed').length ?? 0;
+    const recentNote = dentalNotes.filter(n => n.patientId === infoPatient.patientId)[0];
+    const isTodayPending = todayAppt?.status === 'pending';
+
+    return (
+      <div
+        className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[120] animate-in fade-in duration-200"
+        onClick={() => setInfoPatient(null)}
+      >
+        <div
+          className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-300"
+          onClick={e => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="flex items-center gap-4 px-6 pt-6 pb-4 border-b border-slate-100">
+            <div className="w-16 h-16 rounded-2xl overflow-hidden bg-slate-100 shrink-0">
+              <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${infoPatient.patientName}`} alt="" className="w-full h-full" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h2 className="text-lg font-black text-slate-900 tracking-tighter truncate">{infoPatient.patientName}</h2>
+              <p className="text-xs text-slate-400 font-bold mt-0.5">{patientAppts.length} {patientAppts.length === 1 ? 'visit' : 'visits'}</p>
+            </div>
+            <button
+              onClick={() => setInfoPatient(null)}
+              className="w-8 h-8 rounded-xl bg-slate-100 text-slate-400 flex items-center justify-center hover:bg-slate-200 transition shrink-0"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
+          </div>
+
+          <div className="px-6 py-4 space-y-3">
+            {/* Today's appointment */}
+            {todayAppt && (
+              <div className={`rounded-2xl p-3.5 border ${todayAppt.type === 'virtual' ? 'bg-indigo-50 border-indigo-100' : 'bg-[#A2F0D3]/20 border-[#A2F0D3]/40'}`}>
+                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1.5">Today's Appointment</p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-black text-slate-900">{new Date(todayAppt.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full bg-white/80 text-slate-600 border border-slate-200">
+                      {todayAppt.type === 'virtual' ? 'Virtual' : 'In-Chair'}
+                    </span>
+                    <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full ${todayAppt.status === 'done' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                      {todayAppt.status}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Next appointment (if different from today) */}
+            {nextAppt && nextAppt.id !== todayAppt?.id && (
+              <div className="flex items-center gap-3 bg-slate-50 rounded-xl px-3.5 py-2.5 border border-slate-100">
+                <span className="material-symbols-outlined text-slate-400" style={{ fontSize: '16px' }}>event</span>
+                <div>
+                  <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Next Appointment</p>
+                  <p className="text-xs font-bold text-slate-700">
+                    {new Date(nextAppt.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} · {new Date(nextAppt.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Stats row */}
+            <div className="grid grid-cols-3 gap-2">
+              <div className="bg-slate-50 rounded-2xl p-3 text-center border border-slate-100">
+                <p className="text-[8px] font-black uppercase tracking-widest text-slate-400 mb-1">Last Visit</p>
+                <p className="text-xs font-black text-slate-900 leading-tight">
+                  {lastVisit ? new Date(lastVisit.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}
+                </p>
+              </div>
+              <div className="bg-slate-50 rounded-2xl p-3 text-center border border-slate-100">
+                <p className="text-[8px] font-black uppercase tracking-widest text-slate-400 mb-1">Teeth</p>
+                <p className="text-xs font-black text-slate-900 leading-tight">{markedTeeth > 0 ? `${markedTeeth} issue${markedTeeth !== 1 ? 's' : ''}` : 'None'}</p>
+              </div>
+              <div className="bg-slate-50 rounded-2xl p-3 text-center border border-slate-100">
+                <p className="text-[8px] font-black uppercase tracking-widest text-slate-400 mb-1">Plan</p>
+                <p className="text-xs font-black text-slate-900 leading-tight">{pendingProcs > 0 ? `${pendingProcs} pending` : activePlan ? 'Done' : '—'}</p>
+              </div>
+            </div>
+
+            {/* Recent note preview */}
+            {recentNote && (
+              <div className="bg-slate-50 rounded-2xl p-3.5 border border-slate-100">
+                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1.5">
+                  Last Note · {new Date(recentNote.visitDate || recentNote.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                </p>
+                {recentNote.chiefComplaint && (
+                  <p className="text-xs text-slate-600 line-clamp-1"><span className="font-bold">Complaint:</span> {recentNote.chiefComplaint}</p>
+                )}
+                <p className="text-xs text-slate-600 line-clamp-2"><span className="font-bold">Dx:</span> {recentNote.diagnosis}</p>
+              </div>
+            )}
+
+            {/* Action buttons */}
+            <div className={`grid gap-2 pb-2 pt-1 ${isTodayPending ? 'grid-cols-2' : 'grid-cols-1'}`}>
+              {isTodayPending && (
+                <button
+                  onClick={() => {
+                    setInfoPatient(null);
+                    setWrapUpId(todayAppt!.id);
+                    setWrapUpComment(''); setWrapUpDiagnosis(''); setWrapUpTreatment('');
+                  }}
+                  className="py-3 bg-[#5D44FF] text-white text-[10px] font-black uppercase tracking-widest rounded-2xl hover:opacity-90 transition-all shadow-lg"
+                >
+                  Complete Visit
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  setInfoPatient(null);
+                  setSelectedPatient({ patientId: infoPatient.patientId, patientName: infoPatient.patientName, visitDate: infoPatient.visitDate });
+                }}
+                className="py-3 bg-[#A2F0D3] text-slate-900 text-[10px] font-black uppercase tracking-widest rounded-2xl hover:brightness-95 transition-all"
+              >
+                Open Full Record
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // ── Patient Panel (modal) ────────────────────────────────────────────────
   const renderPatientPanel = () => {
     if (!selectedPatient) return null;
@@ -926,7 +1125,7 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
             <div className="mx-8 mt-4 px-4 py-2.5 bg-[#A2F0D3]/20 border border-[#A2F0D3]/40 rounded-xl flex items-center gap-2 animate-in fade-in duration-200 shrink-0">
               <span className="material-symbols-outlined text-emerald-600" style={{ fontSize: '16px' }}>check_circle</span>
               <p className="text-xs font-bold text-emerald-700">
-                {saveSuccess === 'chart' ? 'Tooth chart saved!' : saveSuccess === 'plan' ? 'Treatment plan saved!' : 'Note saved!'}
+                {saveSuccess === 'chart' ? 'Tooth chart saved!' : saveSuccess === 'plan' ? 'Treatment plan saved!' : 'Note & chart saved!'}
               </p>
             </div>
           )}
@@ -953,19 +1152,19 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
                 {/* Legend */}
                 <div className="flex flex-wrap gap-3">
                   {(Object.entries(TOOTH_STATUS_CONFIG) as [ToothCondition['status'], { color: string; label: string }][]).map(([status, cfg]) => (
-                    <span key={status} className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-slate-500">
-                      <span className="w-3 h-3 rounded-full inline-block shrink-0" style={{ background: cfg.color }} />
+                    <span key={status} className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-slate-500">
+                      <span className="w-3 h-3 rounded-full shrink-0" style={{ background: cfg.color }} />
                       {cfg.label}
                     </span>
                   ))}
                 </div>
 
                 {/* Upper jaw */}
-                <div className="space-y-1">
+                <div className="space-y-1.5">
                   <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 text-center">Upper</p>
-                  <div className="flex justify-center items-center gap-0.5">
+                  <div className="flex justify-center items-end gap-1">
                     {FDI_UPPER[0].map(n => renderTooth(n))}
-                    <div className="w-px h-6 bg-slate-200 mx-2" />
+                    <div className="w-px h-8 bg-slate-200 mx-1 self-center" />
                     {FDI_UPPER[1].map(n => renderTooth(n))}
                   </div>
                 </div>
@@ -973,10 +1172,10 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
                 <div className="h-2" />
 
                 {/* Lower jaw */}
-                <div className="space-y-1">
-                  <div className="flex justify-center items-center gap-0.5">
+                <div className="space-y-1.5">
+                  <div className="flex justify-center items-start gap-1">
                     {FDI_LOWER[0].map(n => renderTooth(n))}
-                    <div className="w-px h-6 bg-slate-200 mx-2" />
+                    <div className="w-px h-8 bg-slate-200 mx-1 self-center" />
                     {FDI_LOWER[1].map(n => renderTooth(n))}
                   </div>
                   <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 text-center">Lower</p>
@@ -1072,14 +1271,16 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
                 {/* Add procedure form */}
                 <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 space-y-2">
                   <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Add Procedure</p>
-                  <select
+                  <input
+                    list="dental-procedures-list"
                     value={newProc.procedure}
                     onChange={e => setNewProc(p => ({ ...p, procedure: e.target.value }))}
+                    placeholder="Type or select a procedure…"
                     className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm outline-none text-slate-900"
-                  >
-                    <option value="">Select procedure…</option>
-                    {DENTAL_PROCEDURES.map(dp => <option key={dp} value={dp}>{dp}</option>)}
-                  </select>
+                  />
+                  <datalist id="dental-procedures-list">
+                    {DENTAL_PROCEDURES.map(dp => <option key={dp} value={dp} />)}
+                  </datalist>
                   <div className="grid grid-cols-2 gap-2">
                     <input
                       value={newProc.tooth ?? ''}
@@ -1127,77 +1328,104 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
             {/* ── VISIT NOTES TAB ── */}
             {patientPanelTab === 'notes' && (
               <div className="space-y-4">
-                {/* History */}
-                {patientDentalNotes.length > 0 && (
-                  <div className="space-y-3">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">History ({patientDentalNotes.length})</p>
-                    <div className="space-y-3 max-h-56 overflow-y-auto no-scrollbar">
-                      {patientDentalNotes.map(note => (
-                        <div key={note.id} className="bg-slate-50 rounded-2xl p-4 border border-slate-100 text-sm space-y-1.5">
-                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                            {new Date(note.visitDate || note.createdAt).toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}
-                          </p>
-                          {note.chiefComplaint && <p><span className="font-bold text-slate-600">Complaint:</span> <span className="text-slate-700">{note.chiefComplaint}</span></p>}
-                          <p><span className="font-bold text-slate-600">Diagnosis:</span> <span className="text-slate-700">{note.diagnosis}</span></p>
-                          <p><span className="font-bold text-slate-600">Treatment:</span> <span className="text-slate-700">{note.treatment}</span></p>
-                          {note.materials && <p className="text-slate-400 text-xs">Materials: {note.materials}</p>}
-                          {note.nextVisit && <p className="text-emerald-600 text-xs font-bold">Next visit: {note.nextVisit}</p>}
-                        </div>
-                      ))}
+                {/* Sub-tab switcher */}
+                <div className="flex items-center gap-1 bg-slate-100 rounded-2xl p-1">
+                  <button
+                    onClick={() => setNotesSubTab('new')}
+                    className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${notesSubTab === 'new' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                  >
+                    New Note
+                  </button>
+                  <button
+                    onClick={() => setNotesSubTab('history')}
+                    className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${notesSubTab === 'history' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                  >
+                    History {patientDentalNotes.length > 0 && `(${patientDentalNotes.length})`}
+                  </button>
+                </div>
+
+                {/* ── NEW NOTE sub-tab ── */}
+                {notesSubTab === 'new' && (
+                  <div className="space-y-4">
+                    {/* Note form */}
+                    <div className="space-y-2">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Note</p>
+                      <input
+                        type="date"
+                        value={noteForm.visitDate}
+                        onChange={e => setNoteForm(f => ({ ...f, visitDate: e.target.value }))}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none text-slate-900"
+                      />
+                      <textarea
+                        value={noteForm.chiefComplaint}
+                        onChange={e => setNoteForm(f => ({ ...f, chiefComplaint: e.target.value }))}
+                        placeholder="Chief complaint…"
+                        rows={2}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none resize-none text-slate-900"
+                      />
+                      <textarea
+                        value={noteForm.diagnosis}
+                        onChange={e => setNoteForm(f => ({ ...f, diagnosis: e.target.value }))}
+                        placeholder="Diagnosis…"
+                        rows={2}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none resize-none text-slate-900"
+                      />
+                      <textarea
+                        value={noteForm.treatment}
+                        onChange={e => setNoteForm(f => ({ ...f, treatment: e.target.value }))}
+                        placeholder="Treatment performed…"
+                        rows={2}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none resize-none text-slate-900"
+                      />
+                      <input
+                        value={noteForm.materials}
+                        onChange={e => setNoteForm(f => ({ ...f, materials: e.target.value }))}
+                        placeholder="Materials used (optional)"
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none text-slate-900"
+                      />
+                      <input
+                        value={noteForm.nextVisit}
+                        onChange={e => setNoteForm(f => ({ ...f, nextVisit: e.target.value }))}
+                        placeholder="Next visit (optional, e.g. 2 weeks)"
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none text-slate-900"
+                      />
+                      <button
+                        onClick={handleSaveVisitNote}
+                        disabled={savingNote}
+                        className="w-full py-3 bg-slate-900 text-white font-black uppercase text-[10px] tracking-widest rounded-2xl disabled:opacity-40 transition-all"
+                      >
+                        {savingNote ? 'Saving...' : 'Save Note'}
+                      </button>
                     </div>
                   </div>
                 )}
 
-                {/* New note form */}
-                <div className="space-y-2">
-                  <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">New Note</p>
-                  <input
-                    type="date"
-                    value={noteForm.visitDate}
-                    onChange={e => setNoteForm(f => ({ ...f, visitDate: e.target.value }))}
-                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none text-slate-900"
-                  />
-                  <textarea
-                    value={noteForm.chiefComplaint}
-                    onChange={e => setNoteForm(f => ({ ...f, chiefComplaint: e.target.value }))}
-                    placeholder="Chief complaint…"
-                    rows={2}
-                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none resize-none text-slate-900"
-                  />
-                  <textarea
-                    value={noteForm.diagnosis}
-                    onChange={e => setNoteForm(f => ({ ...f, diagnosis: e.target.value }))}
-                    placeholder="Diagnosis…"
-                    rows={2}
-                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none resize-none text-slate-900"
-                  />
-                  <textarea
-                    value={noteForm.treatment}
-                    onChange={e => setNoteForm(f => ({ ...f, treatment: e.target.value }))}
-                    placeholder="Treatment performed…"
-                    rows={2}
-                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none resize-none text-slate-900"
-                  />
-                  <input
-                    value={noteForm.materials}
-                    onChange={e => setNoteForm(f => ({ ...f, materials: e.target.value }))}
-                    placeholder="Materials used (optional)"
-                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none text-slate-900"
-                  />
-                  <input
-                    value={noteForm.nextVisit}
-                    onChange={e => setNoteForm(f => ({ ...f, nextVisit: e.target.value }))}
-                    placeholder="Next visit (optional, e.g. 2 weeks)"
-                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none text-slate-900"
-                  />
-                  <button
-                    onClick={handleSaveDentalNote}
-                    disabled={savingNote || !noteForm.chiefComplaint.trim() || !noteForm.diagnosis.trim() || !noteForm.treatment.trim()}
-                    className="w-full py-3 bg-slate-900 text-white font-black uppercase text-[10px] tracking-widest rounded-2xl disabled:opacity-40 transition-all"
-                  >
-                    {savingNote ? 'Saving...' : 'Save Note'}
-                  </button>
-                </div>
+                {/* ── HISTORY sub-tab ── */}
+                {notesSubTab === 'history' && (
+                  <div>
+                    {patientDentalNotes.length === 0 ? (
+                      <div className="py-14 text-center">
+                        <span className="material-symbols-outlined block text-slate-200 mb-3" style={{ fontSize: '40px' }}>history</span>
+                        <p className="text-slate-400 text-sm font-medium">No visit history yet</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {patientDentalNotes.map(note => (
+                          <div key={note.id} className="bg-slate-50 rounded-2xl p-4 border border-slate-100 text-sm space-y-1.5">
+                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                              {new Date(note.visitDate || note.createdAt).toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}
+                            </p>
+                            {note.chiefComplaint && <p><span className="font-bold text-slate-600">Complaint:</span> <span className="text-slate-700">{note.chiefComplaint}</span></p>}
+                            <p><span className="font-bold text-slate-600">Diagnosis:</span> <span className="text-slate-700">{note.diagnosis}</span></p>
+                            <p><span className="font-bold text-slate-600">Treatment:</span> <span className="text-slate-700">{note.treatment}</span></p>
+                            {note.materials && <p className="text-slate-400 text-xs">Materials: {note.materials}</p>}
+                            {note.nextVisit && <p className="text-emerald-600 text-xs font-bold">Next visit: {note.nextVisit}</p>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1273,6 +1501,7 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
         </div>
       )}
 
+      {renderPatientInfoPopup()}
       {renderPatientPanel()}
 
       {/* Left sidebar */}
@@ -1288,7 +1517,7 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
           {navItems.map(item => (
             <button
               key={item.view}
-              onClick={() => { setCurrentView(item.view); setSelectedPatient(null); if (item.view === 'profile') setIsEditingProfile(false); }}
+              onClick={() => { setCurrentView(item.view); setSelectedPatient(null); setInfoPatient(null); if (item.view === 'profile') setIsEditingProfile(false); }}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all text-sm font-bold text-left ${
                 currentView === item.view ? 'bg-white/15 text-white' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
               }`}
