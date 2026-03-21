@@ -2,6 +2,7 @@ import React from 'react';
 import { useUserRole } from './hooks/useUserRole';
 import Auth from './components/Auth';
 import DoctorDashboard from './components/DoctorDashboard';
+import DentistDashboard from './components/DentistDashboard';
 import ClientBooking from './components/ClientBooking';
 import Layout from './components/Layout';
 import LandlordDashboard from './components/LandlordDashboard';
@@ -26,6 +27,10 @@ const App: React.FC = () => {
         <Auth />
       </div>
     );
+  }
+
+  if (profile.role === 'doctor' && profile.category === 'Dentistry') {
+    return <DentistDashboard profile={profile} />;
   }
 
   if (profile.role === 'doctor') {

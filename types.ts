@@ -87,3 +87,53 @@ export interface PatientNote {
   visitDate: string;   // ISO string — pre-filled from appointment date
   createdAt: string;   // ISO string — when the note was saved
 }
+
+export interface ToothCondition {
+  status: 'healthy' | 'cavity' | 'filled' | 'crown' | 'missing' | 'root-canal' | 'implant';
+  note?: string;
+}
+
+export interface ToothChart {
+  id: string;
+  patientId: string;
+  patientName: string;
+  doctorId: string;
+  teeth: Record<number, ToothCondition>;
+  updatedAt: string;
+}
+
+export interface TreatmentProcedure {
+  id: string;
+  tooth?: number;
+  procedure: string;
+  material?: string;
+  cost: number;
+  status: 'pending' | 'in-progress' | 'completed';
+  notes?: string;
+}
+
+export interface TreatmentPlan {
+  id: string;
+  patientId: string;
+  patientName: string;
+  doctorId: string;
+  procedures: TreatmentProcedure[];
+  status: 'active' | 'completed' | 'on-hold';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DentalNote {
+  id: string;
+  patientId: string;
+  patientName: string;
+  doctorId: string;
+  visitDate: string;
+  chiefComplaint: string;
+  diagnosis: string;
+  treatment: string;
+  materials?: string;
+  toothNumbers?: number[];
+  nextVisit?: string;
+  createdAt: string;
+}
