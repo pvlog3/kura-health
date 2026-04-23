@@ -14,7 +14,7 @@ const root = ReactDOM.createRoot(rootElement);
 root.render(
   <React.StrictMode>
     <App />
-    <SpeedInsights />
-    <Analytics />
+    <SpeedInsights debug={true} />
+    <Analytics debug={true} mode="production" />
   </React.StrictMode>
 );
