@@ -122,8 +122,16 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
         const b = snap.docs.map(d => ({ id: d.id, ...(d.data() as Omit<RoomBooking, 'id'>) }))
             .sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt)));
         setBookings(b);
+        setError(null);
       },
-      (e) => console.error('Bookings snap error:', e)
+      (e) => {
+        console.error('Bookings snap error:', e);
+        setError(
+          e.code === 'permission-denied'
+            ? "You don't have permission to read requests."
+            : `Failed to load requests: ${e.message}`
+        );
+      }
     );
 
     return () => { unsubRooms(); unsubBookings(); };
@@ -324,6 +332,18 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
           })}
         </nav>
       </header>
+
+      {error && (
+        <div className="bg-red-50 border-l-4 border-red-500 p-6 rounded-2xl flex items-center gap-4 shadow-sm animate-in fade-in">
+          <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center text-red-600 shrink-0">
+            <span className="material-symbols-outlined">error</span>
+          </div>
+          <div>
+            <h3 className="text-lg font-black text-red-900">Database Access Error</h3>
+            <p className="text-red-700 text-sm font-medium">{error}</p>
+          </div>
+        </div>
+      )}
 
       {/* OVERVIEW TAB */}
       {currentView === 'overview' && (
