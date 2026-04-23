@@ -137,3 +137,54 @@ export interface DentalNote {
   nextVisit?: string;
   createdAt: string;
 }
+
+export type Amenity =
+  | 'wifi'
+  | 'reception'
+  | 'parking'
+  | 'wheelchair'
+  | 'ac'
+  | 'restroom'
+  | 'waiting_area'
+  | 'equipment';
+
+export interface RoomDoc {
+  id: string;
+  ownerId: string;
+  ownerName: string;
+  name: string;
+  address: string;
+  city: string;
+  hourlyRate: number;
+  photos: string[];
+  amenities: Amenity[];
+  notes: string | null;
+  available: boolean;
+  createdAt: string;
+  availability?: WorkingHours;
+  sizeSqft?: number;
+  capacity?: number;
+  instantBook?: boolean;
+  cancellationPolicy?: 'flexible' | 'moderate' | 'strict';
+  allowedCategories?: string[];
+  allowedSpecialties?: string[];
+}
+
+export interface RoomBooking {
+  id: string;
+  roomId: string;
+  roomName: string;
+  roomOwnerId: string;
+  roomOwnerName: string;
+  doctorId: string;
+  doctorName: string;
+  note?: string;
+  status: 'pending' | 'confirmed' | 'cancelled' | 'completed';
+  createdAt: string;
+  
+  // Optional fields for future use
+  date?: string;
+  startTime?: string;
+  endTime?: string;
+  totalPrice?: number;
+}

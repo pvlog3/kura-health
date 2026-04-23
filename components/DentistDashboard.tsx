@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
-import { db, auth } from '../firebase';
-import { signOut } from 'firebase/auth';
+import { db, auth, firebaseConfig } from '../firebase';
+import { initializeApp, deleteApp } from 'firebase/app';
+import { signOut, getAuth, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import {
   collection,
   query,
@@ -9,6 +10,8 @@ import {
   addDoc,
   doc,
   updateDoc,
+  setDoc,
+  getFirestore,
 } from 'firebase/firestore';
 import type {
   UserProfile,
@@ -124,6 +127,11 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
 
   // Patients view
   const [patientSearch, setPatientSearch] = useState('');
+  const [registeredPatients, setRegisteredPatients] = useState<{ uid: string; name: string; email: string; createdAt: string }[]>([]);
+  const [showCreatePatient, setShowCreatePatient] = useState(false);
+  const [createForm, setCreateForm] = useState({ name: '', email: '', password: '' });
+  const [creatingPatient, setCreatingPatient] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   // Profile edit
   const [isEditingProfile, setIsEditingProfile] = useState(false);
@@ -165,7 +173,12 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
       setDentalNotes(notes);
     });
 
-    return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
+    const q5 = query(collection(db, 'users'), where('createdByDentist', '==', profile.uid));
+    const unsub5 = onSnapshot(q5, snap =>
+      setRegisteredPatients(snap.docs.map(d => ({ uid: d.id, name: d.data().name, email: d.data().email, createdAt: d.data().createdAt })))
+    );
+
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); };
   }, [profile.uid]);
 
   // ── Seed patient panel state when patient selected or Firestore data updates ──
@@ -405,6 +418,41 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
     }
   };
 
+  const handleCreatePatient = async () => {
+    if (!createForm.name.trim() || !createForm.email.trim() || createForm.password.length < 6) {
+      setCreateError('Name and email are required; password must be at least 6 characters.');
+      return;
+    }
+    setCreatingPatient(true);
+    setCreateError(null);
+    try {
+      const secondaryApp = initializeApp(firebaseConfig, `create-patient-${Date.now()}`);
+      const secondaryAuth = getAuth(secondaryApp);
+      const secondaryDb = getFirestore(secondaryApp);
+      const cred = await createUserWithEmailAndPassword(secondaryAuth, createForm.email.trim(), createForm.password);
+      await updateProfile(cred.user, { displayName: createForm.name.trim() });
+      await setDoc(doc(secondaryDb, 'users', cred.user.uid), {
+        uid: cred.user.uid,
+        email: createForm.email.trim(),
+        name: createForm.name.trim(),
+        role: 'patient',
+        createdByDentist: profile.uid,
+        createdAt: new Date().toISOString(),
+      });
+      const newPatientId = cred.user.uid;
+      const newPatientName = createForm.name.trim();
+      // Clean up secondary app non-blocking — don't let it prevent the success flow
+      signOut(secondaryAuth).then(() => deleteApp(secondaryApp)).catch(() => {});
+      setShowCreatePatient(false);
+      setCreateForm({ name: '', email: '', password: '' });
+      setInfoPatient({ patientId: newPatientId, patientName: newPatientName });
+    } catch (e: unknown) {
+      setCreateError((e as { message?: string }).message ?? 'Failed to create patient.');
+    } finally {
+      setCreatingPatient(false);
+    }
+  };
+
   // ── Derived data ─────────────────────────────────────────────────────────
   const patientList = useMemo(() => {
     const map = new Map<string, { patientId: string; patientName: string; lastVisit: string; visitCount: number; hasActivePlan: boolean; noteCount: number; markedTeeth: number }>();
@@ -420,8 +468,13 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
         map.set(a.patientId, { ...existing, visitCount: existing.visitCount + 1, hasActivePlan, noteCount, markedTeeth });
       }
     });
+    registeredPatients.forEach(rp => {
+      if (!map.has(rp.uid)) {
+        map.set(rp.uid, { patientId: rp.uid, patientName: rp.name, lastVisit: rp.createdAt, visitCount: 0, hasActivePlan: false, noteCount: 0, markedTeeth: 0 });
+      }
+    });
     return Array.from(map.values()).sort((a, b) => new Date(b.lastVisit).getTime() - new Date(a.lastVisit).getTime());
-  }, [appointments, treatmentPlans, dentalNotes, toothCharts]);
+  }, [appointments, treatmentPlans, dentalNotes, toothCharts, registeredPatients]);
 
   // ── Tooth render (SVG anatomical shapes) ────────────────────────────────
   const renderTooth = (toothNum: number) => {
@@ -608,7 +661,67 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
             className="w-72 bg-white border border-slate-200 rounded-2xl px-5 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
           />
           <p className="text-xs text-slate-400 font-bold">{filtered.length} patient{filtered.length !== 1 ? 's' : ''}</p>
+          <button
+            onClick={() => { setShowCreatePatient(true); setCreateError(null); setCreateForm({ name: '', email: '', password: '' }); }}
+            className="ml-auto flex items-center gap-2 px-5 py-3 bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest rounded-2xl hover:bg-slate-700 transition-all"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>person_add</span>
+            New Patient
+          </button>
         </div>
+
+        {/* ── Create Patient Modal ── */}
+        {showCreatePatient && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-8 space-y-5">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-black text-slate-900">New Patient</h2>
+                <button onClick={() => setShowCreatePatient(false)} className="text-slate-400 hover:text-slate-700 transition-colors">
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              </div>
+              <input
+                value={createForm.name}
+                onChange={e => setCreateForm(f => ({ ...f, name: e.target.value }))}
+                placeholder="Full name"
+                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
+              />
+              <input
+                type="email"
+                value={createForm.email}
+                onChange={e => setCreateForm(f => ({ ...f, email: e.target.value }))}
+                placeholder="Email address"
+                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
+              />
+              <div className="space-y-1">
+                <input
+                  type="password"
+                  value={createForm.password}
+                  onChange={e => setCreateForm(f => ({ ...f, password: e.target.value }))}
+                  placeholder="Temporary password"
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
+                />
+                <p className="text-[10px] text-slate-400 pl-1">The patient can change this after logging in.</p>
+              </div>
+              {createError && <p className="text-xs text-red-500 font-medium">{createError}</p>}
+              <div className="flex gap-3 pt-1">
+                <button
+                  onClick={() => setShowCreatePatient(false)}
+                  className="flex-1 py-3 rounded-2xl border border-slate-200 text-slate-600 text-[10px] font-black uppercase tracking-widest hover:bg-slate-50 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCreatePatient}
+                  disabled={creatingPatient}
+                  className="flex-1 py-3 rounded-2xl bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest disabled:opacity-40 hover:bg-slate-700 transition-all"
+                >
+                  {creatingPatient ? 'Creating…' : 'Create Patient'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {filtered.length === 0 ? (
           <div className="bg-white rounded-2xl border border-slate-100 p-14 text-center">
             <span className="material-symbols-outlined block text-slate-200 mb-3" style={{ fontSize: '44px' }}>people</span>
