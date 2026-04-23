@@ -1,0 +1,105 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isDoctor() {
+      return signedIn()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "doctor";
+    }
+
+    function isLandlord() {
+      return signedIn()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "landlord";
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn();
+      allow write: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /appointments/{appointmentId} {
+      allow read: if signedIn() && (
+        resource.data.patientId == request.auth.uid ||
+        resource.data.doctorId == request.auth.uid
+      );
+      allow create: if signedIn() &&
+        request.resource.data.patientId == request.auth.uid;
+      allow update: if signedIn() && (
+        resource.data.patientId == request.auth.uid ||
+        resource.data.doctorId == request.auth.uid
+      );
+    }
+
+    match /rooms/{roomId} {
+      allow read: if isDoctor()
+        || (isLandlord() && resource.data.ownerId == request.auth.uid);
+      allow create: if isLandlord()
+        && request.resource.data.ownerId == request.auth.uid;
+      allow update, delete: if isLandlord()
+        && resource.data.ownerId == request.auth.uid;
+    }
+
+    match /room_requests/{requestId} {
+      allow create: if isDoctor()
+        && request.resource.data.doctorId == request.auth.uid
+        && request.resource.data.roomId is string
+        && request.resource.data.roomName is string
+        && request.resource.data.doctorName is string
+        && request.resource.data.status == "pending"
+        && request.resource.data.createdAt is string;
+      allow read: if (isDoctor() && resource.data.doctorId == request.auth.uid)
+        || (isLandlord() && resource.data.roomOwnerId == request.auth.uid);
+      allow update: if isLandlord() && resource.data.roomOwnerId == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // --- MEDICATIONS ---
+    match /medications/{docId} {
+      allow read: if signedIn() && resource.data.patientId == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.patientId == request.auth.uid;
+      allow update, delete: if signedIn() && resource.data.patientId == request.auth.uid;
+    }
+
+    // --- MEDICATION LOGS ---
+    match /medicationLogs/{docId} {
+      allow read: if signedIn() && resource.data.patientId == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.patientId == request.auth.uid;
+      allow update, delete: if signedIn() && resource.data.patientId == request.auth.uid;
+    }
+    
+     match /patient_notes/{noteId} {
+      allow read, write: if request.auth != null
+        && request.auth.uid == resource.data.doctorId;
+      allow create: if request.auth != null
+        && request.auth.uid == request.resource.data.doctorId;
+    }
+        // --- TOOTH CHARTS ---
+    match /tooth_charts/{docId} {
+      allow read, update, delete: if isDoctor()
+        && resource.data.doctorId == request.auth.uid;
+      allow create: if isDoctor()
+        && request.resource.data.doctorId == request.auth.uid;
+    }
+
+    // --- TREATMENT PLANS ---
+    match /treatment_plans/{docId} {
+      allow read, update, delete: if isDoctor()
+        && resource.data.doctorId == request.auth.uid;
+      allow create: if isDoctor()
+        && request.resource.data.doctorId == request.auth.uid;
+    }
+
+    // --- DENTAL NOTES ---
+    match /dental_notes/{docId} {
+      allow read, update, delete: if isDoctor()
+        && resource.data.doctorId == request.auth.uid;
+      allow create: if isDoctor()
+        && request.resource.data.doctorId == request.auth.uid;
+    }
+
+  }
+}

@@ -60,6 +60,8 @@ interface RoomListing {
   available?: boolean;
   ownerId?: string;
   ownerName?: string;
+  allowedCategories?: string[];
+  allowedSpecialties?: string[];
 }
 
 const DEFAULT_HOURS: WorkingHours = {
@@ -549,13 +551,20 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
     const q = roomSearch.trim().toLowerCase();
     const max = typeof maxRate === 'number' ? maxRate : null;
     return rooms.filter((r) => {
+      // Professional Category Filter
+      if (r.allowedCategories && r.allowedCategories.length > 0) {
+        if (!profile.category || !r.allowedCategories.includes(profile.category)) {
+          return false;
+        }
+      }
+
       const hay = `${r.name} ${r.city} ${r.address}`.toLowerCase();
       const matchText = q ? hay.includes(q) : true;
       const matchRate = max !== null ? r.hourlyRate <= max : true;
       const matchAvailability = r.available === undefined ? true : r.available;
       return matchText && matchRate && matchAvailability;
     });
-  }, [rooms, roomSearch, maxRate]);
+  }, [rooms, roomSearch, maxRate, profile.category]);
 
   const amenityLabel = (a: RoomAmenity) => {
     const map: Record<RoomAmenity, string> = {

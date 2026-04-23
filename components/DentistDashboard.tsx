@@ -23,13 +23,15 @@ import type {
   TreatmentProcedure,
   TreatmentPlan,
   DentalNote,
+  RoomDoc,
+  Amenity,
 } from '../types';
 
 interface DentistDashboardProps {
   profile: UserProfile;
 }
 
-type DentistView = 'overview' | 'patients' | 'schedule' | 'profile';
+type DentistView = 'overview' | 'patients' | 'schedule' | 'profile' | 'rooms';
 
 const DEFAULT_HOURS: WorkingHours = { start: '08:00', end: '19:00', days: [1, 2, 3, 4, 5] };
 
@@ -146,7 +148,37 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
   // Save success feedback
   const [saveSuccess, setSaveSuccess] = useState<'chart' | 'plan' | 'note' | null>(null);
 
+  // ── Rooms (Rental) ────────────────────────────────────────────────────────
+  const [rooms, setRooms] = useState<RoomDoc[]>([]);
+  const [roomsLoading, setRoomsLoading] = useState(false);
+  const [roomsError, setRoomsError] = useState<string | null>(null);
+  const [roomSearch, setRoomSearch] = useState('');
+  const [maxRate, setMaxRate] = useState<number | ''>('');
+  const [requestingRoom, setRequestingRoom] = useState<RoomDoc | null>(null);
+  const [requestNote, setRequestNote] = useState('');
+  const [submittingRequest, setSubmittingRequest] = useState(false);
+
   // ── Firestore listeners ──────────────────────────────────────────────────
+  useEffect(() => {
+    if (currentView !== 'rooms') return;
+    setRoomsLoading(true);
+    const qRooms = query(collection(db, 'rooms'));
+    const unsubscribe = onSnapshot(
+      qRooms,
+      (snapshot) => {
+        const nextRooms = snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<RoomDoc, 'id'>) }));
+        setRooms(nextRooms);
+        setRoomsLoading(false);
+      },
+      (e) => {
+        console.error('Rooms snap error:', e);
+        setRoomsError(e.message);
+        setRoomsLoading(false);
+      }
+    );
+    return () => unsubscribe();
+  }, [currentView]);
+
   useEffect(() => {
     const q1 = query(collection(db, 'appointments'), where('doctorId', '==', profile.uid));
     const unsub1 = onSnapshot(q1, snap => {
@@ -1547,11 +1579,241 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
     );
   };
 
+  // ── Rooms Logic ──────────────────────────────────────────────────────────
+  const filteredRooms = useMemo(() => {
+    const q = roomSearch.trim().toLowerCase();
+    const max = typeof maxRate === 'number' ? maxRate : null;
+    return rooms.filter((r) => {
+      // Professional Category Filter
+      if (r.allowedCategories && r.allowedCategories.length > 0) {
+        if (!profile.category || !r.allowedCategories.includes(profile.category)) {
+          return false;
+        }
+      }
+
+      const hay = `${r.name} ${r.city} ${r.address}`.toLowerCase();
+      const matchText = q ? hay.includes(q) : true;
+      const matchRate = max !== null ? r.hourlyRate <= max : true;
+      const matchAvailability = r.available === undefined ? true : r.available;
+      return matchText && matchRate && matchAvailability;
+    });
+  }, [rooms, roomSearch, maxRate, profile.category]);
+
+  const amenityLabel = (a: Amenity) => {
+    const map: Record<Amenity, string> = {
+      wifi: 'Wi‑Fi',
+      reception: 'Reception',
+      parking: 'Parking',
+      wheelchair: 'Accessible',
+      ac: 'A/C',
+      restroom: 'Restroom',
+      waiting_area: 'Waiting area',
+      equipment: 'Equipment',
+    };
+    return map[a] ?? a;
+  };
+
+  const submitRoomRequest = async () => {
+    if (!requestingRoom || submittingRequest) return;
+    setSubmittingRequest(true);
+    try {
+      await addDoc(collection(db, 'room_requests'), {
+        roomId: requestingRoom.id,
+        roomName: requestingRoom.name,
+        roomOwnerId: requestingRoom.ownerId || null,
+        roomOwnerName: requestingRoom.ownerName || null,
+        doctorId: profile.uid,
+        doctorName: profile.name,
+        note: requestNote.trim() || null,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+      });
+      setRequestNote('');
+      setRequestingRoom(null);
+      alert('Request sent. The room owner will contact you.');
+    } catch (error) {
+      console.error('Error creating room request:', error);
+      alert('Failed to send request. Please try again.');
+    } finally {
+      setSubmittingRequest(false);
+    }
+  };
+
+  const renderRooms = () => (
+    <div className="space-y-8 animate-in fade-in duration-500">
+      <header className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-500">Practice</p>
+          <h1 className="text-4xl font-black text-slate-900 tracking-tighter">Rooms to rent</h1>
+          <p className="text-slate-500 text-sm mt-2 font-medium">
+            Find a space for in-person appointments.
+          </p>
+        </div>
+        <div className="flex gap-3">
+          <div className="relative">
+            <input
+              value={roomSearch}
+              onChange={(e) => setRoomSearch(e.target.value)}
+              placeholder="Search city, address, name…"
+              className="w-72 max-w-full bg-white border border-slate-200 rounded-2xl px-5 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all text-slate-900"
+            />
+          </div>
+          <div className="relative">
+            <input
+              value={maxRate}
+              onChange={(e) => {
+                const v = e.target.value.trim();
+                if (v === '') setMaxRate('');
+                else setMaxRate(Number(v));
+              }}
+              inputMode="numeric"
+              placeholder="Max $/hr"
+              className="w-28 bg-white border border-slate-200 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all text-slate-900"
+            />
+          </div>
+        </div>
+      </header>
+
+      {roomsLoading && (
+        <div className="bg-white p-10 rounded-[2.5rem] border border-slate-200 shadow-sm text-center">
+          <p className="text-slate-500 text-sm font-bold">Loading rooms…</p>
+        </div>
+      )}
+
+      {roomsError && (
+        <div className="bg-red-50 p-8 rounded-[2.5rem] border border-red-200">
+          <p className="text-red-700 text-sm font-bold">{roomsError}</p>
+        </div>
+      )}
+
+      {!roomsLoading && !roomsError && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+          {filteredRooms.map((room) => (
+            <div key={room.id} className="bg-white border border-slate-200 rounded-[2rem] overflow-hidden hover:shadow-xl transition-all group flex flex-col">
+              <div className="h-56 bg-slate-100 relative overflow-hidden shrink-0">
+                {room.photos && room.photos.length > 0 ? (
+                  <img src={room.photos[0]} alt={room.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center text-slate-300 gap-2">
+                    <span className="material-symbols-outlined" style={{ fontSize: '48px' }}>image</span>
+                    <span className="text-xs font-black uppercase tracking-widest">No photo</span>
+                  </div>
+                )}
+                <div className="absolute top-4 right-4 bg-white/90 backdrop-blur-md px-4 py-2 rounded-2xl shadow-sm">
+                  <span className="font-black text-slate-900">${room.hourlyRate}</span>
+                  <span className="text-slate-500 text-xs font-bold">/hr</span>
+                </div>
+              </div>
+              
+              <div className="p-6 flex flex-col flex-1">
+                <div className="mb-4">
+                  <h3 className="text-lg font-black text-slate-900 truncate leading-tight">{room.name}</h3>
+                  <div className="flex items-center gap-1.5 mt-2 text-slate-500">
+                    <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>location_on</span>
+                    <span className="text-sm truncate">{room.address}, {room.city}</span>
+                  </div>
+                </div>
+
+                {room.amenities && room.amenities.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mb-6 mt-auto">
+                    {room.amenities.slice(0, 3).map((a) => (
+                      <span key={a} className="px-3 py-1.5 bg-slate-50 border border-slate-100 text-slate-600 rounded-xl text-[10px] font-bold uppercase tracking-wide">
+                        {amenityLabel(a as Amenity)}
+                      </span>
+                    ))}
+                    {room.amenities.length > 3 && (
+                      <span className="px-3 py-1.5 bg-slate-50 border border-slate-100 text-slate-400 rounded-xl text-[10px] font-bold uppercase tracking-wide">
+                        +{room.amenities.length - 3}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                <button
+                  onClick={() => setRequestingRoom(room)}
+                  className="w-full mt-auto py-4 bg-slate-900 text-white text-[11px] font-black uppercase tracking-widest rounded-2xl hover:bg-blue-600 transition-colors"
+                >
+                  Request to Rent
+                </button>
+              </div>
+            </div>
+          ))}
+          {filteredRooms.length === 0 && (
+            <div className="col-span-full py-20 text-center">
+              <span className="material-symbols-outlined block text-slate-200 mb-4" style={{ fontSize: '48px' }}>search_off</span>
+              <p className="text-slate-500 font-medium">No rooms found matching your search.</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {requestingRoom && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 z-[60] animate-in fade-in">
+          <div className="bg-white rounded-[2.5rem] w-full max-w-lg overflow-hidden shadow-2xl">
+            <div className="px-8 py-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <h3 className="text-xl font-black text-slate-900">Request to Rent</h3>
+              <button onClick={() => setRequestingRoom(null)} className="text-slate-400 hover:text-slate-900 transition-colors">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            
+            <div className="p-8 space-y-6">
+              <div className="flex gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                {requestingRoom.photos?.[0] ? (
+                  <img src={requestingRoom.photos[0]} alt="" className="w-16 h-16 rounded-xl object-cover" />
+                ) : (
+                  <div className="w-16 h-16 rounded-xl bg-slate-200 flex items-center justify-center text-slate-400">
+                    <span className="material-symbols-outlined">image</span>
+                  </div>
+                )}
+                <div>
+                  <h4 className="font-bold text-slate-900">{requestingRoom.name}</h4>
+                  <p className="text-sm text-slate-500">{requestingRoom.city}</p>
+                  <p className="text-sm font-black text-slate-900 mt-1">${requestingRoom.hourlyRate}/hr</p>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-3">
+                  Message to Host (Optional)
+                </label>
+                <textarea
+                  value={requestNote}
+                  onChange={(e) => setRequestNote(e.target.value)}
+                  placeholder="Introduce yourself, mention dates/times you need..."
+                  rows={4}
+                  className="w-full bg-white border border-slate-200 rounded-2xl px-5 py-4 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all resize-none text-slate-900"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => setRequestingRoom(null)}
+                  className="flex-1 py-4 text-slate-500 font-black uppercase text-[10px] tracking-widest hover:bg-slate-50 rounded-2xl transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={submitRoomRequest}
+                  disabled={submittingRequest}
+                  className="flex-[2] py-4 bg-slate-900 text-white font-black uppercase text-[10px] tracking-widest rounded-2xl hover:bg-black transition-all disabled:opacity-50 shadow-lg"
+                >
+                  {submittingRequest ? 'Sending...' : 'Send Request'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
   // ── Nav ──────────────────────────────────────────────────────────────────
   const navItems: { view: DentistView; label: string; icon: string }[] = [
     { view: 'overview',  label: 'Dashboard', icon: 'grid_view' },
     { view: 'patients',  label: 'Patients',  icon: 'people' },
     { view: 'schedule',  label: 'Schedule',  icon: 'calendar_month' },
+    { view: 'rooms',     label: 'Rooms',     icon: 'door_open' },
     { view: 'profile',   label: 'Profile',   icon: 'person' },
   ];
 
@@ -1559,6 +1821,7 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
     overview: 'Dashboard',
     patients: 'Patients',
     schedule: 'Schedule',
+    rooms:    'Rooms',
     profile:  'Profile',
   };
 
@@ -1674,6 +1937,7 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
           ) : currentView === 'overview' ? renderOverview()
             : currentView === 'patients' ? renderPatients()
             : currentView === 'schedule' ? renderSchedule()
+            : currentView === 'rooms' ? renderRooms()
             : renderProfile()}
         </main>
       </div>
