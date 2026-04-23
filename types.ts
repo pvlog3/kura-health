@@ -155,7 +155,7 @@ export interface RoomDoc {
   name: string;
   address: string;
   city: string;
-  hourlyRate: number;
+  dailyRate: number;
   photos: string[];
   amenities: Amenity[];
   notes: string | null;

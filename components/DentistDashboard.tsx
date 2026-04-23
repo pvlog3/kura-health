@@ -156,6 +156,7 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
   const [maxRate, setMaxRate] = useState<number | ''>('');
   const [requestingRoom, setRequestingRoom] = useState<RoomDoc | null>(null);
   const [requestNote, setRequestNote] = useState('');
+  const [requestDate, setRequestDate] = useState('');
   const [submittingRequest, setSubmittingRequest] = useState(false);
 
   // ── Firestore listeners ──────────────────────────────────────────────────
@@ -1593,7 +1594,7 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
 
       const hay = `${r.name} ${r.city} ${r.address}`.toLowerCase();
       const matchText = q ? hay.includes(q) : true;
-      const matchRate = max !== null ? r.hourlyRate <= max : true;
+      const matchRate = max !== null ? r.dailyRate <= max : true;
       const matchAvailability = r.available === undefined ? true : r.available;
       return matchText && matchRate && matchAvailability;
     });
@@ -1614,7 +1615,7 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
   };
 
   const submitRoomRequest = async () => {
-    if (!requestingRoom || submittingRequest) return;
+    if (!requestingRoom || submittingRequest || !requestDate) return;
     setSubmittingRequest(true);
     try {
       await addDoc(collection(db, 'room_requests'), {
@@ -1624,11 +1625,14 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
         roomOwnerName: requestingRoom.ownerName || null,
         doctorId: profile.uid,
         doctorName: profile.name,
+        date: requestDate,
+        totalPrice: requestingRoom.dailyRate,
         note: requestNote.trim() || null,
         status: 'pending',
         createdAt: new Date().toISOString(),
       });
       setRequestNote('');
+      setRequestDate('');
       setRequestingRoom(null);
       alert('Request sent. The room owner will contact you.');
     } catch (error) {
@@ -1700,8 +1704,8 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
                   </div>
                 )}
                 <div className="absolute top-4 right-4 bg-white/90 backdrop-blur-md px-4 py-2 rounded-2xl shadow-sm">
-                  <span className="font-black text-slate-900">${room.hourlyRate}</span>
-                  <span className="text-slate-500 text-xs font-bold">/hr</span>
+                  <span className="font-black text-slate-900">${room.dailyRate}</span>
+                  <span className="text-slate-500 text-xs font-bold">/day</span>
                 </div>
               </div>
               
@@ -1730,7 +1734,7 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
                 )}
 
                 <button
-                  onClick={() => setRequestingRoom(room)}
+                  onClick={() => { setRequestingRoom(room); setRequestNote(''); setRequestDate(''); }}
                   className="w-full mt-auto py-4 bg-slate-900 text-white text-[11px] font-black uppercase tracking-widest rounded-2xl hover:bg-blue-600 transition-colors"
                 >
                   Request to Rent
@@ -1769,21 +1773,36 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
                 <div>
                   <h4 className="font-bold text-slate-900">{requestingRoom.name}</h4>
                   <p className="text-sm text-slate-500">{requestingRoom.city}</p>
-                  <p className="text-sm font-black text-slate-900 mt-1">${requestingRoom.hourlyRate}/hr</p>
+                  <p className="text-sm font-black text-slate-900 mt-1">${requestingRoom.dailyRate}/day</p>
                 </div>
               </div>
 
-              <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-3">
-                  Message to Host (Optional)
-                </label>
-                <textarea
-                  value={requestNote}
-                  onChange={(e) => setRequestNote(e.target.value)}
-                  placeholder="Introduce yourself, mention dates/times you need..."
-                  rows={4}
-                  className="w-full bg-white border border-slate-200 rounded-2xl px-5 py-4 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all resize-none text-slate-900"
-                />
+              <div className="space-y-5">
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-3">
+                    Rental Date *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={requestDate}
+                    onChange={(e) => setRequestDate(e.target.value)}
+                    className="w-full bg-white border border-slate-200 rounded-2xl px-5 py-4 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all text-slate-900"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-3">
+                    Message to Host (Optional)
+                  </label>
+                  <textarea
+                    value={requestNote}
+                    onChange={(e) => setRequestNote(e.target.value)}
+                    placeholder="Introduce yourself, mention dates/times you need..."
+                    rows={4}
+                    className="w-full bg-white border border-slate-200 rounded-2xl px-5 py-4 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all resize-none text-slate-900"
+                  />
+                </div>
               </div>
 
               <div className="flex gap-3 pt-2">

@@ -51,7 +51,7 @@ interface RoomListing {
   name: string;
   address: string;
   city: string;
-  hourlyRate: number;
+  dailyRate: number;
   photos?: string[];
   amenities?: RoomAmenity[];
   notes?: string;
@@ -96,6 +96,7 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
   const [maxRate, setMaxRate] = useState<number | ''>('');
   const [requestingRoom, setRequestingRoom] = useState<RoomListing | null>(null);
   const [requestNote, setRequestNote] = useState('');
+  const [requestDate, setRequestDate] = useState('');
   const [submittingRequest, setSubmittingRequest] = useState(false);
   
   // Date states
@@ -560,7 +561,7 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
 
       const hay = `${r.name} ${r.city} ${r.address}`.toLowerCase();
       const matchText = q ? hay.includes(q) : true;
-      const matchRate = max !== null ? r.hourlyRate <= max : true;
+      const matchRate = max !== null ? r.dailyRate <= max : true;
       const matchAvailability = r.available === undefined ? true : r.available;
       return matchText && matchRate && matchAvailability;
     });
@@ -581,7 +582,7 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
   };
 
   const submitRoomRequest = async () => {
-    if (!requestingRoom || submittingRequest) return;
+    if (!requestingRoom || submittingRequest || !requestDate) return;
     setSubmittingRequest(true);
     try {
       await addDoc(collection(db, 'room_requests'), {
@@ -591,11 +592,14 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
         roomOwnerName: requestingRoom.ownerName || null,
         doctorId: profile.uid,
         doctorName: profile.name,
+        date: requestDate,
+        totalPrice: requestingRoom.dailyRate,
         note: requestNote.trim() || null,
         status: 'pending',
         createdAt: new Date().toISOString(),
       });
       setRequestNote('');
+      setRequestDate('');
       setRequestingRoom(null);
       alert('Request sent. The room owner will contact you.');
     } catch (error) {
@@ -680,7 +684,7 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
                       </div>
                     )}
                     <div className="absolute top-4 right-4 bg-slate-900 text-white px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest shadow-lg">
-                      ${r.hourlyRate}/hr
+                      ${r.dailyRate}/day
                     </div>
                   </div>
                   <div className="p-8 space-y-4">
@@ -700,7 +704,7 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
                     )}
                     <div className="pt-2 flex gap-3">
                       <button
-                        onClick={() => { setRequestingRoom(r); setRequestNote(''); }}
+                        onClick={() => { setRequestingRoom(r); setRequestNote(''); setRequestDate(''); }}
                         className="flex-1 py-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest hover:bg-black transition-colors shadow-lg"
                       >
                         Request rental
@@ -732,7 +736,7 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
               <div>
                 <p className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-500">Request rental</p>
                 <h3 className="text-2xl font-black text-slate-900 tracking-tighter mt-2">{requestingRoom.name}</h3>
-                <p className="text-slate-500 text-sm mt-2">{requestingRoom.city} • ${requestingRoom.hourlyRate}/hr</p>
+                <p className="text-slate-500 text-sm mt-2">{requestingRoom.city} • ${requestingRoom.dailyRate}/day</p>
               </div>
               <button
                 onClick={() => setRequestingRoom(null)}
@@ -745,14 +749,27 @@ const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ profile }) => {
               </button>
             </div>
 
-            <div className="mt-8 space-y-3">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Message (optional)</label>
+            <div className="mt-8 space-y-5">
+              <div className="space-y-3">
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Rental Date *</label>
+                <input
+                  type="date"
+                  required
+                  value={requestDate}
+                  onChange={(e) => setRequestDate(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-[1.5rem] px-5 py-4 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-900"
+                />
+              </div>
+
+              <div className="space-y-3">
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Message (optional)</label>
               <textarea
                 value={requestNote}
                 onChange={(e) => setRequestNote(e.target.value)}
                 placeholder="e.g. I’d like to rent this room on Tuesdays 14:00–18:00 for consultations."
                 className="w-full h-32 bg-slate-50 border border-slate-200 rounded-[1.5rem] p-6 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-900"
               />
+              </div>
             </div>
 
             <div className="mt-8 flex gap-4">

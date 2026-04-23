@@ -29,7 +29,7 @@ const emptyForm = {
   name: '',
   address: '',
   city: '',
-  hourlyRate: '',
+  dailyRate: '',
   notes: '',
   available: true,
   amenities: new Set<Amenity>(),
@@ -181,7 +181,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
       name: r.name,
       address: r.address,
       city: r.city,
-      hourlyRate: String(r.hourlyRate),
+      dailyRate: String(r.dailyRate),
       notes: r.notes || '',
       available: r.available,
       amenities: new Set(r.amenities),
@@ -212,9 +212,9 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
       return;
     }
 
-    const hourly = Number(String(form.hourlyRate).trim());
-    if (!Number.isFinite(hourly) || hourly <= 0) {
-      alert('Please enter a valid hourly rate.');
+    const daily = Number(String(form.dailyRate).trim());
+    if (!Number.isFinite(daily) || daily <= 0) {
+      alert('Please enter a valid daily rate.');
       return;
     }
 
@@ -233,7 +233,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
         name: listingName,
         address: form.address.trim(),
         city: form.city.trim(),
-        hourlyRate: hourly,
+        dailyRate: daily,
         photos,
         amenities: Array.from(form.amenities),
         notes: form.notes.trim() ? form.notes.trim() : null,
@@ -604,10 +604,10 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   <div className="space-y-8">
                     <div>
-                      <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Hourly Rate ($)</label>
+                      <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Daily Rate ($)</label>
                       <input
-                        value={form.hourlyRate}
-                        onChange={(e) => setForm((p) => ({ ...p, hourlyRate: e.target.value }))}
+                        value={form.dailyRate}
+                        onChange={(e) => setForm((p) => ({ ...p, dailyRate: e.target.value }))}
                         type="number"
                         placeholder="e.g. 45"
                         required
@@ -908,7 +908,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                 <div className="p-6">
                   <div className="flex justify-between items-start gap-4 mb-3">
                     <h4 className="text-lg font-black text-slate-900 leading-tight line-clamp-1">{r.name}</h4>
-                    <p className="text-lg font-black text-slate-900 shrink-0">${r.hourlyRate}<span className="text-xs text-slate-500 font-normal">/hr</span></p>
+                    <p className="text-lg font-black text-slate-900 shrink-0">${r.dailyRate}<span className="text-xs text-slate-500 font-normal">/day</span></p>
                   </div>
                   
                   <p className="text-slate-500 text-xs flex items-center gap-1.5 mb-4">
@@ -985,7 +985,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                    </tr>
                  </thead>
                  <tbody className="divide-y divide-slate-100">
-                   {bookings.map(b => (
+                   {[...bookings].sort((a, b) => new Date(a.date || a.createdAt).getTime() - new Date(b.date || b.createdAt).getTime()).map(b => (
                      <tr key={b.id} className="hover:bg-slate-50 transition-colors group">
                        <td className="py-5">
                          <p className="font-bold text-slate-900">{b.date || new Date(b.createdAt).toLocaleDateString()}</p>
