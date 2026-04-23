@@ -138,6 +138,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
   const activeRoomsCount = myRooms.filter(r => r.available).length;
   const totalEarningsMock = bookings.filter(b => b.status === 'completed').reduce((acc, curr) => acc + (curr.totalPrice || 0), 0);
   const upcomingBookingsCount = bookings.filter(b => b.status === 'confirmed').length;
+  const pendingRequestsCount = bookings.filter(b => b.status === 'pending').length;
 
   const handlePhotoFile = (e: React.ChangeEvent<HTMLInputElement>, index: number) => {
     const file = e.target.files?.[0];
@@ -288,33 +289,66 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
         </div>
 
         <nav className="flex items-center gap-2 overflow-x-auto pb-2 md:pb-0 hide-scrollbar">
-          {(['overview', 'bookings', 'rooms', 'create'] as LandlordView[]).map((view) => (
-            <button
-              key={view}
-              onClick={() => {
-                setCurrentView(view);
-                if (view !== 'create') {
-                  setEditingRoom(null);
-                  setForm(emptyForm);
-                  setPhotoPreviews([null, null, null]);
-                  setCreateStep(1);
-                }
-              }}
-              className={`whitespace-nowrap px-6 py-3 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all ${
-                currentView === view
-                  ? 'bg-slate-900 text-white shadow-md'
-                  : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
-              }`}
-            >
-              {view === 'create' ? (editingRoom ? 'Edit Listing' : '+ New Listing') : view}
-            </button>
-          ))}
+          {(['overview', 'bookings', 'rooms', 'create'] as LandlordView[]).map((view) => {
+            const isBookings = view === 'bookings';
+            const label = view === 'create' 
+              ? (editingRoom ? 'Edit Listing' : '+ New Listing') 
+              : view === 'bookings' ? 'Requests & Bookings' : view;
+
+            return (
+              <button
+                key={view}
+                onClick={() => {
+                  setCurrentView(view);
+                  if (view !== 'create') {
+                    setEditingRoom(null);
+                    setForm(emptyForm);
+                    setPhotoPreviews([null, null, null]);
+                    setCreateStep(1);
+                  }
+                }}
+                className={`flex items-center gap-2 whitespace-nowrap px-6 py-3 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all ${
+                  currentView === view
+                    ? 'bg-slate-900 text-white shadow-md'
+                    : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
+                }`}
+              >
+                {label}
+                {isBookings && pendingRequestsCount > 0 && (
+                  <span className="flex items-center justify-center w-5 h-5 text-[10px] bg-red-500 text-white rounded-full shadow-sm animate-bounce">
+                    {pendingRequestsCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </nav>
       </header>
 
       {/* OVERVIEW TAB */}
       {currentView === 'overview' && (
         <section className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
+          
+          {pendingRequestsCount > 0 && (
+            <div className="bg-amber-50 border-l-4 border-amber-500 p-6 rounded-2xl flex items-center justify-between shadow-sm animate-in fade-in">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center text-amber-600">
+                  <span className="material-symbols-outlined">notification_important</span>
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-amber-900">You have {pendingRequestsCount} pending request{pendingRequestsCount > 1 ? 's' : ''}!</h3>
+                  <p className="text-amber-700 text-sm font-medium">A doctor is waiting for your approval to rent your space.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setCurrentView('bookings')}
+                className="px-6 py-3 bg-amber-500 text-white font-black uppercase text-[11px] tracking-widest rounded-xl hover:bg-amber-600 transition-colors shadow-sm"
+              >
+                Review Requests
+              </button>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="bg-white border border-slate-200 rounded-[2rem] p-8 shadow-sm relative overflow-hidden group">
               <div className="absolute top-0 right-0 p-8 text-slate-100 group-hover:scale-110 group-hover:-rotate-12 transition-transform duration-500">
