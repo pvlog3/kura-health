@@ -6,8 +6,10 @@ import DentistDashboard from './components/DentistDashboard';
 import ClientBooking from './components/ClientBooking';
 import Layout from './components/Layout';
 import LandlordDashboard from './components/LandlordDashboard';
+import { SpeedInsights } from "@vercel/speed-insights/react";
+import { Analytics } from "@vercel/analytics/react";
 
-const App: React.FC = () => {
+const AppContent: React.FC = () => {
   const { user, profile, loading } = useUserRole();
 
   if (loading) {
@@ -45,6 +47,16 @@ const App: React.FC = () => {
         <ClientBooking profile={profile} />
       )}
     </Layout>
+  );
+};
+
+const App: React.FC = () => {
+  return (
+    <>
+      <AppContent />
+      <SpeedInsights debug={true} />
+      <Analytics debug={true} mode="production" />
+    </>
   );
 };
 
