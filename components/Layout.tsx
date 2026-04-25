@@ -17,7 +17,7 @@ const KuraLogo = () => (
 
 const Layout: React.FC<LayoutProps> = ({ children, profile }) => {
   const handleLogout = () => signOut(auth);
-  const isLightTheme = profile?.role === 'doctor' || profile?.role === 'landlord';
+  const isLightTheme = profile?.role === 'doctor' || profile?.role === 'landlord' || profile?.role === 'patient';
 
   return (
     <div className={`min-h-screen flex flex-col ${isLightTheme ? 'bg-slate-50' : 'bg-[#121417]'}`}>
