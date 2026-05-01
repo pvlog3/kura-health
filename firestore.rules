@@ -101,5 +101,34 @@ service cloud.firestore {
         && request.resource.data.doctorId == request.auth.uid;
     }
 
+    // --- CHATS ---
+    match /chats/{chatId} {
+      allow read: if signedIn() && (
+        resource.data.landlordId == request.auth.uid ||
+        resource.data.doctorId == request.auth.uid
+      );
+      allow create: if signedIn() && (
+        request.resource.data.landlordId == request.auth.uid ||
+        request.resource.data.doctorId == request.auth.uid
+      );
+      allow update: if signedIn() && (
+        resource.data.landlordId == request.auth.uid ||
+        resource.data.doctorId == request.auth.uid
+      );
+    }
+
+    // --- CHAT MESSAGES ---
+    match /chat_messages/{messageId} {
+      allow read: if signedIn() && (
+        get(/databases/$(database)/documents/chats/$(resource.data.chatId)).data.landlordId == request.auth.uid ||
+        get(/databases/$(database)/documents/chats/$(resource.data.chatId)).data.doctorId == request.auth.uid
+      );
+      allow create: if signedIn() &&
+        request.resource.data.senderId == request.auth.uid && (
+          get(/databases/$(database)/documents/chats/$(request.resource.data.chatId)).data.landlordId == request.auth.uid ||
+          get(/databases/$(database)/documents/chats/$(request.resource.data.chatId)).data.doctorId == request.auth.uid
+        );
+    }
+
   }
 }
