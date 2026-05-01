@@ -12,6 +12,7 @@ import {
   updateDoc,
   setDoc,
   getFirestore,
+  orderBy,
 } from 'firebase/firestore';
 import type {
   UserProfile,
@@ -25,13 +26,15 @@ import type {
   DentalNote,
   RoomDoc,
   Amenity,
+  Chat,
+  ChatMessage,
 } from '../types';
 
 interface DentistDashboardProps {
   profile: UserProfile;
 }
 
-type DentistView = 'overview' | 'patients' | 'schedule' | 'profile' | 'rooms';
+type DentistView = 'overview' | 'patients' | 'schedule' | 'profile' | 'rooms' | 'messages';
 
 const DEFAULT_HOURS: WorkingHours = { start: '08:00', end: '19:00', days: [1, 2, 3, 4, 5] };
 
@@ -159,6 +162,14 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
   const [requestDate, setRequestDate] = useState('');
   const [submittingRequest, setSubmittingRequest] = useState(false);
 
+  // Chat state
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [sendingMessage, setSendingMessage] = useState(false);
+  const chatBottomRef = useRef<HTMLDivElement>(null);
+
   // ── Firestore listeners ──────────────────────────────────────────────────
   useEffect(() => {
     if (currentView !== 'rooms') return;
@@ -211,8 +222,43 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
       setRegisteredPatients(snap.docs.map(d => ({ uid: d.id, name: d.data().name, email: d.data().email, createdAt: d.data().createdAt })))
     );
 
-    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); };
+    const qChats = query(collection(db, 'chats'), where('doctorId', '==', profile.uid));
+    const unsub6 = onSnapshot(qChats, (snap) => {
+      const c = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as Omit<Chat, 'id'>) }))
+        .sort((a, b) => (b.lastMessageAt ?? b.createdAt).localeCompare(a.lastMessageAt ?? a.createdAt));
+      setChats(c);
+    }, (error) => {
+      if (error.code !== 'permission-denied') console.error('Chats snapshot error:', error);
+    });
+
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); };
   }, [profile.uid]);
+
+  useEffect(() => {
+    if (!selectedChatId) { setChatMessages([]); return; }
+    const q = query(
+      collection(db, 'chat_messages'),
+      where('chatId', '==', selectedChatId),
+      orderBy('createdAt', 'asc')
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      setChatMessages(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<ChatMessage, 'id'>) })));
+    });
+    return () => unsub();
+  }, [selectedChatId]);
+
+  useEffect(() => {
+    if (!selectedChatId) return;
+    const chat = chats.find((c) => c.id === selectedChatId);
+    if (chat && (chat.unreadByDoctor ?? 0) > 0) {
+      updateDoc(doc(db, 'chats', selectedChatId), { unreadByDoctor: 0 });
+    }
+  }, [selectedChatId, chats]);
+
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
 
   // ── Seed patient panel state when patient selected or Firestore data updates ──
   // Including toothCharts/treatmentPlans in deps means the chart always reflects
@@ -1733,12 +1779,21 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
                   </div>
                 )}
 
-                <button
-                  onClick={() => { setRequestingRoom(room); setRequestNote(''); setRequestDate(''); }}
-                  className="w-full mt-auto py-4 bg-slate-900 text-white text-[11px] font-black uppercase tracking-widest rounded-2xl hover:bg-blue-600 transition-colors"
-                >
-                  Request to Rent
-                </button>
+                <div className="flex gap-3 mt-auto">
+                  <button
+                    onClick={() => { setRequestingRoom(room); setRequestNote(''); setRequestDate(''); }}
+                    className="flex-1 py-4 bg-slate-900 text-white text-[11px] font-black uppercase tracking-widest rounded-2xl hover:bg-blue-600 transition-colors"
+                  >
+                    Request to Rent
+                  </button>
+                  <button
+                    onClick={() => handleDoctorStartChat(room)}
+                    className="flex items-center gap-1.5 px-4 py-4 bg-slate-100 text-slate-700 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-colors"
+                  >
+                    <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>chat</span>
+                    Chat
+                  </button>
+                </div>
               </div>
             </div>
           ))}
@@ -1827,12 +1882,177 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
     </div>
   );
 
+  const unreadChatsCount = chats.filter((c) => (c.unreadByDoctor ?? 0) > 0).length;
+
+  const handleDoctorStartChat = async (room: RoomDoc) => {
+    const existing = chats.find((c) => c.roomId === room.id && c.doctorId === profile.uid);
+    if (existing) {
+      setSelectedChatId(existing.id);
+      setCurrentView('messages');
+      return;
+    }
+    const chatRef = await addDoc(collection(db, 'chats'), {
+      participants: [profile.uid, room.ownerId ?? ''],
+      roomId: room.id,
+      roomName: room.name,
+      landlordId: room.ownerId ?? '',
+      landlordName: room.ownerName ?? 'Owner',
+      doctorId: profile.uid,
+      doctorName: profile.name,
+      lastMessage: '',
+      lastMessageAt: new Date().toISOString(),
+      unreadByLandlord: 0,
+      unreadByDoctor: 0,
+      createdAt: new Date().toISOString(),
+    });
+    setSelectedChatId(chatRef.id);
+    setCurrentView('messages');
+  };
+
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim() || !selectedChatId || sendingMessage) return;
+    setSendingMessage(true);
+    const text = chatInput.trim();
+    setChatInput('');
+    try {
+      await addDoc(collection(db, 'chat_messages'), {
+        chatId: selectedChatId,
+        senderId: profile.uid,
+        senderName: profile.name,
+        text,
+        createdAt: new Date().toISOString(),
+      });
+      await updateDoc(doc(db, 'chats', selectedChatId), {
+        lastMessage: text,
+        lastMessageAt: new Date().toISOString(),
+        unreadByLandlord: (chats.find((c) => c.id === selectedChatId)?.unreadByLandlord ?? 0) + 1,
+      });
+    } catch (err) {
+      console.error('Send message error:', err);
+    } finally {
+      setSendingMessage(false);
+    }
+  };
+
+  const renderMessages = () => {
+    const selectedChat = chats.find((c) => c.id === selectedChatId);
+    return (
+      <div className="flex h-[calc(100vh-4rem)] -m-8 animate-in fade-in duration-300">
+        {/* Conversation list */}
+        <div className={`w-80 shrink-0 border-r border-slate-200 flex flex-col bg-white ${selectedChatId ? 'hidden md:flex' : 'flex'}`}>
+          <div className="px-6 py-5 border-b border-slate-100">
+            <h2 className="text-xl font-black text-slate-900 tracking-tighter">Messages</h2>
+            <p className="text-slate-500 text-xs font-medium mt-0.5">{chats.length} conversation{chats.length !== 1 ? 's' : ''}</p>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {chats.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full px-8 text-center gap-3">
+                <span className="material-symbols-outlined text-slate-300" style={{ fontSize: '48px' }}>chat</span>
+                <p className="text-slate-500 text-sm font-medium">No conversations yet.</p>
+                <p className="text-slate-400 text-xs">Chat with a room owner from the <strong>Rooms</strong> tab.</p>
+              </div>
+            ) : (
+              chats.map((chat) => (
+                <button
+                  key={chat.id}
+                  onClick={() => setSelectedChatId(chat.id)}
+                  className={`w-full text-left px-5 py-4 border-b border-slate-100 hover:bg-slate-50 transition-colors flex items-start gap-3 ${selectedChatId === chat.id ? 'bg-slate-50' : ''}`}
+                >
+                  <div className="w-10 h-10 rounded-full overflow-hidden shrink-0 bg-slate-100">
+                    <img src={`https://api.dicebear.com/7.x/initials/svg?seed=${chat.landlordName}`} alt="" className="w-full h-full" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-bold text-slate-900 text-sm truncate">{chat.roomName}</p>
+                      {(chat.unreadByDoctor ?? 0) > 0 && (
+                        <span className="shrink-0 min-w-[18px] h-[18px] bg-blue-600 text-white text-[10px] font-black rounded-full flex items-center justify-center px-1">
+                          {chat.unreadByDoctor}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-slate-500 text-xs truncate mt-0.5">{chat.landlordName}</p>
+                    {chat.lastMessage && (
+                      <p className="text-slate-400 text-xs truncate mt-0.5">{chat.lastMessage}</p>
+                    )}
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Thread */}
+        <div className={`flex-1 flex flex-col bg-slate-50 ${selectedChatId ? 'flex' : 'hidden md:flex'}`}>
+          {!selectedChat ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-center gap-3">
+              <span className="material-symbols-outlined text-slate-300" style={{ fontSize: '56px' }}>forum</span>
+              <p className="text-slate-500 font-medium text-sm">Select a conversation</p>
+            </div>
+          ) : (
+            <>
+              <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center gap-3 shrink-0">
+                <button
+                  onClick={() => setSelectedChatId(null)}
+                  className="md:hidden w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center"
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>arrow_back</span>
+                </button>
+                <div>
+                  <p className="font-black text-slate-900 text-sm">{selectedChat.roomName}</p>
+                  <p className="text-slate-500 text-xs">{selectedChat.landlordName}</p>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto px-6 py-6 space-y-3">
+                {chatMessages.length === 0 && (
+                  <p className="text-center text-slate-400 text-xs font-medium py-8">No messages yet. Say hello!</p>
+                )}
+                {chatMessages.map((msg) => {
+                  const isOwn = msg.senderId === profile.uid;
+                  return (
+                    <div key={msg.id} className={`flex ${isOwn ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[70%] px-4 py-3 rounded-2xl text-sm font-medium shadow-sm ${isOwn ? 'bg-slate-900 text-white rounded-br-md' : 'bg-white text-slate-800 rounded-bl-md border border-slate-200'}`}>
+                        <p>{msg.text}</p>
+                        <p className="text-[10px] mt-1 text-slate-400">
+                          {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+                <div ref={chatBottomRef} />
+              </div>
+
+              <form onSubmit={handleSendMessage} className="bg-white border-t border-slate-200 px-6 py-4 flex gap-3 shrink-0">
+                <input
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Type a message…"
+                  className="flex-1 bg-slate-50 border border-slate-200 rounded-2xl px-5 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                />
+                <button
+                  type="submit"
+                  disabled={!chatInput.trim() || sendingMessage}
+                  className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center hover:bg-black transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-md"
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>send</span>
+                </button>
+              </form>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   // ── Nav ──────────────────────────────────────────────────────────────────
-  const navItems: { view: DentistView; label: string; icon: string }[] = [
+  const navItems: { view: DentistView; label: string; icon: string; badge?: number }[] = [
     { view: 'overview',  label: 'Dashboard', icon: 'grid_view' },
     { view: 'patients',  label: 'Patients',  icon: 'people' },
     { view: 'schedule',  label: 'Schedule',  icon: 'calendar_month' },
     { view: 'rooms',     label: 'Rooms',     icon: 'door_open' },
+    { view: 'messages',  label: 'Messages',  icon: 'chat',          badge: unreadChatsCount },
     { view: 'profile',   label: 'Profile',   icon: 'person' },
   ];
 
@@ -1841,6 +2061,7 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
     patients: 'Patients',
     schedule: 'Schedule',
     rooms:    'Rooms',
+    messages: 'Messages',
     profile:  'Profile',
   };
 
@@ -1912,13 +2133,24 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
           {navItems.map(item => (
             <button
               key={item.view}
-              onClick={() => { setCurrentView(item.view); setSelectedPatient(null); setInfoPatient(null); if (item.view === 'profile') setIsEditingProfile(false); }}
+              onClick={() => {
+                setCurrentView(item.view);
+                setSelectedPatient(null);
+                setInfoPatient(null);
+                if (item.view !== 'messages') setSelectedChatId(null);
+                if (item.view === 'profile') setIsEditingProfile(false);
+              }}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all text-sm font-bold text-left ${
                 currentView === item.view ? 'bg-white/15 text-white' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
               }`}
             >
               <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>{item.icon}</span>
-              {item.label}
+              <span className="flex-1">{item.label}</span>
+              {(item.badge ?? 0) > 0 && (
+                <span className="min-w-[18px] h-[18px] bg-blue-500 text-white text-[10px] font-black rounded-full flex items-center justify-center px-1">
+                  {item.badge}
+                </span>
+              )}
             </button>
           ))}
         </nav>
@@ -1948,7 +2180,7 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
           </span>
         </header>
 
-        <main className="flex-1 p-8">
+        <main className={currentView === 'messages' ? '' : 'flex-1 p-8'}>
           {loading ? (
             <div className="flex items-center justify-center h-64">
               <p className="text-slate-400 text-sm font-bold animate-pulse">Loading…</p>
@@ -1957,6 +2189,7 @@ const DentistDashboard: React.FC<DentistDashboardProps> = ({ profile }) => {
             : currentView === 'patients' ? renderPatients()
             : currentView === 'schedule' ? renderSchedule()
             : currentView === 'rooms' ? renderRooms()
+            : currentView === 'messages' ? renderMessages()
             : renderProfile()}
         </main>
       </div>

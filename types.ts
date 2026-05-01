@@ -188,3 +188,29 @@ export interface RoomBooking {
   endTime?: string;
   totalPrice?: number;
 }
+
+export interface Chat {
+  id: string;
+  participants: string[];
+  roomId: string;
+  roomName: string;
+  landlordId: string;
+  landlordName: string;
+  doctorId: string;
+  doctorName: string;
+  lastMessage?: string;
+  lastMessageAt?: string;
+  unreadByLandlord?: number;
+  unreadByDoctor?: number;
+  bookingId?: string;
+  createdAt: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  chatId: string;
+  senderId: string;
+  senderName: string;
+  text: string;
+  createdAt: string;
+}

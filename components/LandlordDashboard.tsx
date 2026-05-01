@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { db } from '../firebase';
 import {
   addDoc,
@@ -10,9 +10,9 @@ import {
   updateDoc,
   where,
 } from 'firebase/firestore';
-import type { UserProfile, WorkingHours, RoomDoc, Amenity, RoomBooking } from '../types';
+import type { UserProfile, WorkingHours, RoomDoc, Amenity, RoomBooking, Chat, ChatMessage } from '../types';
 
-type LandlordView = 'overview' | 'create' | 'rooms' | 'bookings' | 'finances';
+type LandlordView = 'overview' | 'create' | 'rooms' | 'bookings' | 'finances' | 'messages';
 
 const AMENITIES: { id: Amenity; label: string; icon: string }[] = [
   { id: 'wifi', label: 'Wi‑Fi', icon: 'wifi' },
@@ -69,6 +69,7 @@ const SPECIALTIES: Record<string, { id: string; label: string }[]> = {
 };
 
 const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
+  // ── Room / booking state ──
   const [myRooms, setMyRooms] = useState<RoomDoc[]>([]);
   const [bookings, setBookings] = useState<RoomBooking[]>([]);
   const [loading, setLoading] = useState(true);
@@ -86,6 +87,15 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
   const [calendarDate, setCalendarDate] = useState<Date>(() => new Date());
   const [selectedCalendarDay, setSelectedCalendarDay] = useState<string | null>(null);
 
+  // ── Chat state ──
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [sendingMessage, setSendingMessage] = useState(false);
+  const chatBottomRef = useRef<HTMLDivElement>(null);
+
+  // ── Subscriptions ──
   useEffect(() => {
     const qRooms = query(collection(db, 'rooms'), where('ownerId', '==', profile.uid));
     const unsubRooms = onSnapshot(
@@ -129,9 +139,48 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
       }
     );
 
-    return () => { unsubRooms(); unsubBookings(); };
+    const qChats = query(collection(db, 'chats'), where('landlordId', '==', profile.uid));
+    const unsubChats = onSnapshot(qChats, (snap) => {
+      const c = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as Omit<Chat, 'id'>) }))
+        .sort((a, b) => (b.lastMessageAt ?? b.createdAt).localeCompare(a.lastMessageAt ?? a.createdAt));
+      setChats(c);
+    });
+
+    return () => { unsubRooms(); unsubBookings(); unsubChats(); };
   }, [profile.uid]);
 
+  // Subscribe to messages for the open chat
+  useEffect(() => {
+    if (!selectedChatId) {
+      setChatMessages([]);
+      return;
+    }
+    const q = query(collection(db, 'chat_messages'), where('chatId', '==', selectedChatId));
+    const unsub = onSnapshot(q, (snap) => {
+      const msgs = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as Omit<ChatMessage, 'id'>) }))
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      setChatMessages(msgs);
+    });
+    return () => unsub();
+  }, [selectedChatId]);
+
+  // Mark chat as read when landlord opens it
+  useEffect(() => {
+    if (!selectedChatId) return;
+    const chat = chats.find((c) => c.id === selectedChatId);
+    if (chat && (chat.unreadByLandlord ?? 0) > 0) {
+      updateDoc(doc(db, 'chats', selectedChatId), { unreadByLandlord: 0 }).catch(console.error);
+    }
+  }, [selectedChatId, chats]);
+
+  // Auto-scroll messages to bottom
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
+
+  // ── Derived ──
   const filteredRooms = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return myRooms;
@@ -144,6 +193,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     .reduce((acc, curr) => acc + (curr.totalPrice || 0), 0);
   const upcomingBookingsCount = bookings.filter((b) => b.status === 'confirmed').length;
   const pendingRequestsCount = bookings.filter((b) => b.status === 'pending').length;
+  const unreadChatsCount = chats.filter((c) => (c.unreadByLandlord ?? 0) > 0).length;
 
   const bookingsByDay = useMemo(() => {
     const map: Record<string, RoomBooking[]> = {};
@@ -214,6 +264,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     )
     .sort((a, b) => new Date(a.date || a.createdAt).getTime() - new Date(b.date || b.createdAt).getTime());
 
+  // ── Handlers ──
   const handlePhotoFile = (e: React.ChangeEvent<HTMLInputElement>, index: number) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -356,11 +407,72 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     }
   };
 
+  const handleStartChat = async (booking: RoomBooking) => {
+    const existing = chats.find(
+      (c) => c.doctorId === booking.doctorId && c.roomId === booking.roomId
+    );
+    if (existing) {
+      setSelectedChatId(existing.id);
+      setCurrentView('messages');
+      return;
+    }
+    try {
+      const chatRef = await addDoc(collection(db, 'chats'), {
+        participants: [profile.uid, booking.doctorId],
+        roomId: booking.roomId,
+        roomName: booking.roomName,
+        landlordId: profile.uid,
+        landlordName: profile.name,
+        doctorId: booking.doctorId,
+        doctorName: booking.doctorName,
+        lastMessage: '',
+        lastMessageAt: new Date().toISOString(),
+        unreadByLandlord: 0,
+        unreadByDoctor: 0,
+        bookingId: booking.id,
+        createdAt: new Date().toISOString(),
+      });
+      setSelectedChatId(chatRef.id);
+      setCurrentView('messages');
+    } catch (err) {
+      console.error('Create chat error:', err);
+    }
+  };
+
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const text = chatInput.trim();
+    if (!text || !selectedChatId || sendingMessage) return;
+    setSendingMessage(true);
+    setChatInput('');
+    try {
+      const now = new Date().toISOString();
+      const currentChat = chats.find((c) => c.id === selectedChatId);
+      await addDoc(collection(db, 'chat_messages'), {
+        chatId: selectedChatId,
+        senderId: profile.uid,
+        senderName: profile.name,
+        text,
+        createdAt: now,
+      });
+      await updateDoc(doc(db, 'chats', selectedChatId), {
+        lastMessage: text,
+        lastMessageAt: now,
+        unreadByDoctor: (currentChat?.unreadByDoctor ?? 0) + 1,
+      });
+    } catch (err) {
+      console.error('Send message error:', err);
+    } finally {
+      setSendingMessage(false);
+    }
+  };
+
   const navItems = [
     { view: 'overview' as LandlordView, label: 'Overview', icon: 'grid_view', badge: 0 },
     { view: 'bookings' as LandlordView, label: 'Bookings', icon: 'event_available', badge: pendingRequestsCount },
     { view: 'rooms' as LandlordView, label: 'My Listings', icon: 'apartment', badge: 0 },
     { view: 'finances' as LandlordView, label: 'Finances', icon: 'payments', badge: 0 },
+    { view: 'messages' as LandlordView, label: 'Messages', icon: 'chat', badge: unreadChatsCount },
     { view: 'create' as LandlordView, label: editingRoom ? 'Edit Listing' : 'New Listing', icon: 'add_circle', badge: 0 },
   ];
 
@@ -371,6 +483,9 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
       setForm(emptyForm);
       setPhotoPreviews([null, null, null]);
       setCreateStep(1);
+    }
+    if (view !== 'messages') {
+      setSelectedChatId(null);
     }
   };
 
@@ -1157,7 +1272,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse min-w-[800px]">
+                  <table className="w-full text-left border-collapse min-w-[860px]">
                     <thead>
                       <tr className="border-b border-slate-200">
                         <th className="pb-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Date & Time</th>
@@ -1176,8 +1291,15 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                             {b.startTime && <p className="text-xs text-slate-500 mt-1">{b.startTime} - {b.endTime}</p>}
                           </td>
                           <td className="py-5 font-medium text-slate-700">{b.roomName}</td>
-                          <td className="py-5 font-medium text-slate-700">{b.doctorName}</td>
-                          <td className="py-5 max-w-[200px] truncate">
+                          <td className="py-5">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-xl bg-slate-100 overflow-hidden border border-slate-200 shrink-0">
+                                <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${b.doctorName}`} alt="" className="w-full h-full object-cover" />
+                              </div>
+                              <span className="font-medium text-slate-700">{b.doctorName}</span>
+                            </div>
+                          </td>
+                          <td className="py-5 max-w-[180px] truncate">
                             {b.totalPrice ? (
                               <span className="font-black text-slate-900">${b.totalPrice}</span>
                             ) : (
@@ -1194,28 +1316,37 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                             </span>
                           </td>
                           <td className="py-5">
-                            {b.status === 'pending' && (
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={async () => {
-                                    try { await updateDoc(doc(db, 'room_requests', b.id), { status: 'confirmed' }); }
-                                    catch { alert('Failed to confirm'); }
-                                  }}
-                                  className="px-3 py-1.5 bg-slate-900 text-white text-[9px] font-black uppercase tracking-widest rounded-lg hover:bg-black transition-colors"
-                                >
-                                  Approve
-                                </button>
-                                <button
-                                  onClick={async () => {
-                                    try { await updateDoc(doc(db, 'room_requests', b.id), { status: 'cancelled' }); }
-                                    catch { alert('Failed to decline'); }
-                                  }}
-                                  className="px-3 py-1.5 bg-slate-100 text-slate-600 text-[9px] font-black uppercase tracking-widest rounded-lg hover:bg-slate-200 transition-colors"
-                                >
-                                  Decline
-                                </button>
-                              </div>
-                            )}
+                            <div className="flex gap-2 flex-wrap">
+                              {b.status === 'pending' && (
+                                <>
+                                  <button
+                                    onClick={async () => {
+                                      try { await updateDoc(doc(db, 'room_requests', b.id), { status: 'confirmed' }); }
+                                      catch { alert('Failed to confirm'); }
+                                    }}
+                                    className="px-3 py-1.5 bg-slate-900 text-white text-[9px] font-black uppercase tracking-widest rounded-lg hover:bg-black transition-colors"
+                                  >
+                                    Approve
+                                  </button>
+                                  <button
+                                    onClick={async () => {
+                                      try { await updateDoc(doc(db, 'room_requests', b.id), { status: 'cancelled' }); }
+                                      catch { alert('Failed to decline'); }
+                                    }}
+                                    className="px-3 py-1.5 bg-slate-100 text-slate-600 text-[9px] font-black uppercase tracking-widest rounded-lg hover:bg-slate-200 transition-colors"
+                                  >
+                                    Decline
+                                  </button>
+                                </>
+                              )}
+                              <button
+                                onClick={() => handleStartChat(b)}
+                                className="px-3 py-1.5 bg-blue-50 text-blue-700 text-[9px] font-black uppercase tracking-widest rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-1 border border-blue-100"
+                              >
+                                <span className="material-symbols-outlined text-[12px]">chat</span>
+                                Chat
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -1229,8 +1360,6 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
           {/* ── FINANCES ── */}
           {currentView === 'finances' && (
             <section className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
-
-              {/* KPI Cards */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="bg-white border border-slate-200 rounded-[2rem] p-6 shadow-sm relative overflow-hidden group">
                   <div className="absolute top-0 right-0 p-5 text-emerald-50 group-hover:scale-110 transition-transform duration-500">
@@ -1266,7 +1395,6 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                 </div>
               </div>
 
-              {/* Monthly bar chart */}
               <div className="bg-white border border-slate-200 rounded-[2.5rem] p-8 shadow-sm">
                 <h3 className="text-xl font-black text-slate-900 tracking-tight mb-6">Monthly Earnings</h3>
                 {financesData.monthlyEarnings.every((m) => m.total === 0) ? (
@@ -1292,7 +1420,6 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                 )}
               </div>
 
-              {/* Per-room horizontal bars */}
               {financesData.roomEarnings.length > 0 ? (
                 <div className="bg-white border border-slate-200 rounded-[2.5rem] p-8 shadow-sm">
                   <h3 className="text-xl font-black text-slate-900 tracking-tight mb-6">Earnings by Room</h3>
@@ -1304,10 +1431,7 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                           <p className="text-sm font-black text-slate-900">${r.total}</p>
                         </div>
                         <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
-                          <div
-                            className="h-3 rounded-full bg-slate-900 transition-all duration-700"
-                            style={{ width: `${r.pct}%` }}
-                          />
+                          <div className="h-3 rounded-full bg-slate-900 transition-all duration-700" style={{ width: `${r.pct}%` }} />
                         </div>
                       </div>
                     ))}
@@ -1321,6 +1445,173 @@ const LandlordDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                   <p className="text-slate-400 text-sm font-medium">Per-room earnings will appear once bookings are completed.</p>
                 </div>
               )}
+            </section>
+          )}
+
+          {/* ── MESSAGES ── */}
+          {currentView === 'messages' && (
+            <section className="animate-in fade-in slide-in-from-bottom-4">
+              <div className="flex gap-5 h-[calc(100vh-220px)] min-h-[500px]">
+
+                {/* Conversation list */}
+                <div className={`${selectedChatId ? 'hidden md:flex' : 'flex'} flex-col w-full md:w-80 shrink-0 bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm`}>
+                  <div className="p-5 border-b border-slate-100">
+                    <h2 className="text-lg font-black text-slate-900 tracking-tight">Messages</h2>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {chats.length} conversation{chats.length !== 1 ? 's' : ''}
+                    </p>
+                  </div>
+                  <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+                    {chats.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
+                        <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-4">
+                          <span className="material-symbols-outlined text-slate-300 text-3xl">chat</span>
+                        </div>
+                        <p className="text-slate-600 text-sm font-bold">No conversations yet.</p>
+                        <p className="text-slate-400 text-xs mt-1">Use the Chat button in Bookings to start one.</p>
+                      </div>
+                    ) : (
+                      chats.map((chat) => {
+                        const isActive = selectedChatId === chat.id;
+                        const hasUnread = (chat.unreadByLandlord ?? 0) > 0;
+                        return (
+                          <button
+                            key={chat.id}
+                            onClick={() => setSelectedChatId(chat.id)}
+                            className={`w-full flex items-center gap-3.5 p-4 text-left transition-colors ${isActive ? 'bg-slate-50' : 'hover:bg-slate-50'}`}
+                          >
+                            <div className="w-11 h-11 rounded-2xl bg-slate-100 overflow-hidden shrink-0 border border-slate-200">
+                              <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${chat.doctorName}`} alt="" className="w-full h-full object-cover" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-baseline justify-between gap-1">
+                                <p className={`text-sm truncate ${hasUnread ? 'font-black text-slate-900' : 'font-bold text-slate-800'}`}>
+                                  {chat.doctorName}
+                                </p>
+                                {chat.lastMessageAt && (
+                                  <p className="text-[10px] text-slate-400 shrink-0">
+                                    {new Date(chat.lastMessageAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                                  </p>
+                                )}
+                              </div>
+                              <p className="text-[10px] text-slate-400 truncate font-semibold uppercase tracking-wide">{chat.roomName}</p>
+                              {chat.lastMessage && (
+                                <p className={`text-xs truncate mt-0.5 ${hasUnread ? 'text-slate-700 font-medium' : 'text-slate-400'}`}>
+                                  {chat.lastMessage}
+                                </p>
+                              )}
+                            </div>
+                            {hasUnread && (
+                              <span className="w-5 h-5 rounded-full bg-blue-500 text-white text-[9px] font-black flex items-center justify-center shrink-0">
+                                {chat.unreadByLandlord}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+                {/* Chat thread / empty placeholder */}
+                {selectedChatId ? (() => {
+                  const chat = chats.find((c) => c.id === selectedChatId);
+                  if (!chat) return null;
+                  return (
+                    <div className="flex-1 flex flex-col bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm min-w-0">
+                      {/* Thread header */}
+                      <div className="p-4 border-b border-slate-100 flex items-center gap-3.5">
+                        <button
+                          onClick={() => setSelectedChatId(null)}
+                          className="md:hidden w-9 h-9 rounded-xl bg-slate-100 flex items-center justify-center text-slate-600 shrink-0"
+                        >
+                          <span className="material-symbols-outlined text-[18px]">arrow_back</span>
+                        </button>
+                        <div className="w-10 h-10 rounded-xl bg-slate-100 overflow-hidden border border-slate-200 shrink-0">
+                          <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${chat.doctorName}`} alt="" className="w-full h-full object-cover" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-black text-slate-900 text-sm leading-tight truncate">{chat.doctorName}</p>
+                          <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold truncate">{chat.roomName}</p>
+                        </div>
+                        <button
+                          onClick={() => setCurrentView('bookings')}
+                          className="px-3 py-1.5 bg-slate-100 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-slate-200 transition-colors flex items-center gap-1.5 shrink-0"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">event_available</span>
+                          <span className="hidden sm:inline">Booking</span>
+                        </button>
+                      </div>
+
+                      {/* Messages */}
+                      <div className="flex-1 overflow-y-auto p-5 space-y-4">
+                        {chatMessages.length === 0 ? (
+                          <div className="flex flex-col items-center justify-center h-full text-center py-12">
+                            <div className="w-14 h-14 bg-slate-50 rounded-full flex items-center justify-center mb-3 border border-slate-200">
+                              <span className="material-symbols-outlined text-slate-300 text-2xl">chat_bubble</span>
+                            </div>
+                            <p className="text-slate-600 text-sm font-bold">Start the conversation</p>
+                            <p className="text-slate-400 text-xs mt-1">Send a message to {chat.doctorName}.</p>
+                          </div>
+                        ) : (
+                          chatMessages.map((msg) => {
+                            const isOwn = msg.senderId === profile.uid;
+                            return (
+                              <div key={msg.id} className={`flex ${isOwn ? 'justify-end' : 'justify-start'}`}>
+                                {!isOwn && (
+                                  <div className="w-8 h-8 rounded-xl bg-slate-100 overflow-hidden border border-slate-200 mr-2.5 shrink-0 self-end mb-5">
+                                    <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${chat.doctorName}`} alt="" className="w-full h-full object-cover" />
+                                  </div>
+                                )}
+                                <div className={`max-w-[72%] flex flex-col gap-1 ${isOwn ? 'items-end' : 'items-start'}`}>
+                                  <div className={`px-4 py-3 rounded-2xl text-sm leading-relaxed ${isOwn ? 'bg-slate-900 text-white rounded-br-md' : 'bg-slate-100 text-slate-800 rounded-bl-md'}`}>
+                                    {msg.text}
+                                  </div>
+                                  <p className="text-[10px] text-slate-400 px-1">
+                                    {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </p>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                        <div ref={chatBottomRef} />
+                      </div>
+
+                      {/* Input */}
+                      <div className="p-4 border-t border-slate-100">
+                        <form onSubmit={handleSendMessage} className="flex gap-3">
+                          <input
+                            type="text"
+                            value={chatInput}
+                            onChange={(e) => setChatInput(e.target.value)}
+                            placeholder={`Message ${chat.doctorName}…`}
+                            disabled={sendingMessage}
+                            className="flex-1 bg-slate-50 border border-slate-200 rounded-2xl px-5 py-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-slate-900 transition-all placeholder-slate-400 disabled:opacity-60"
+                          />
+                          <button
+                            type="submit"
+                            disabled={sendingMessage || !chatInput.trim()}
+                            className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center hover:bg-black transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm shrink-0"
+                          >
+                            <span className="material-symbols-outlined text-[20px]">send</span>
+                          </button>
+                        </form>
+                      </div>
+                    </div>
+                  );
+                })() : (
+                  <div className="flex-1 hidden md:flex flex-col items-center justify-center bg-white border border-slate-200 rounded-3xl shadow-sm text-center p-10">
+                    <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mb-5 border border-slate-100">
+                      <span className="material-symbols-outlined text-slate-300 text-4xl">chat</span>
+                    </div>
+                    <h3 className="text-xl font-black text-slate-900 tracking-tight">Select a conversation</h3>
+                    <p className="text-slate-500 text-sm mt-2 max-w-xs leading-relaxed">
+                      Choose a chat from the list, or open the Bookings tab and click Chat on any request.
+                    </p>
+                  </div>
+                )}
+              </div>
             </section>
           )}
 
